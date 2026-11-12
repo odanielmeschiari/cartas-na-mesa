@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 
+import PatienceTable from './components/PatienceTable';
 import { ErrorBanner } from './components/ErrorBanner';
 import { RoomPanel } from './components/RoomPanel';
 import { RoomSetupForm } from './components/RoomSetupForm';
@@ -19,6 +20,7 @@ import { describeSnapshot, formatRoomCode, NICKNAME_MAX_LENGTH } from './ui/pres
  */
 export function App() {
   const spike = useSpikeClient();
+  const [mode, setMode] = useState<'multiplayer' | 'solo'>('multiplayer');
 
   const [nickname, setNickname] = useState('');
   const [roomCodeInput, setRoomCodeInput] = useState('');
@@ -67,7 +69,7 @@ export function App() {
 
   return (
     <main className="min-h-screen bg-stone-100 px-4 py-6 text-stone-900">
-      <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
+      <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
         <header className="flex flex-col gap-1">
           <h1 className="text-2xl font-bold">Cartas na Mesa</h1>
           <p className="text-sm text-stone-700">
@@ -80,7 +82,25 @@ export function App() {
           onDismiss={spike.dismissError}
         />
 
-        {spike.phase === 'in-room' && room !== null ? (
+        <nav aria-label="Modo de jogo" className="flex gap-2">
+          {(['multiplayer', 'solo'] as const).map((m) => (
+            <button
+              aria-pressed={mode === m}
+              className={`cnm-interactive rounded-md border px-3 py-1.5 text-sm font-semibold ${
+                mode === m ? 'border-stone-900 bg-stone-900 text-stone-50' : 'border-stone-400 bg-white text-stone-900'
+              }`}
+              key={m}
+              onClick={() => setMode(m)}
+              type="button"
+            >
+              {m === 'multiplayer' ? 'Sala online' : 'Paciência (solo)'}
+            </button>
+          ))}
+        </nav>
+
+        {mode === 'solo' ? (
+          <PatienceTable />
+        ) : spike.phase === 'in-room' && room !== null ? (
           <RoomPanel onLeave={spike.leaveRoom} onPlayCard={spike.playCard} room={room} />
         ) : (
           <>

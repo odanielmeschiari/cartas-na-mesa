@@ -218,6 +218,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@cartas-na-mesa/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@cartas-na-mesa/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol

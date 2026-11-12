@@ -1,388 +1,264 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
-import { patienceGame, type PatienceState, type PatienceActionPayload, type PatienceEvent } from '@cartas-na-mesa/core';
+import {
+  createSeededRng,
+  patienceGame,
+  PATIENCE_SUITS,
+  type PatienceActionPayload,
+  type PatienceCard,
+  type PatienceState,
+  type PatienceSuit,
+} from '@cartas-na-mesa/core';
+
+import { cardBackUrl, cardFaceUrl, cardName, SUIT_SYMBOL } from '../ui/card-assets';
+
+const PLAYER_ID = 'player-1';
+const PLAYERS = [{ playerId: PLAYER_ID, seatIndex: 0, nickname: 'Você', avatarId: null }] as const;
+
+type Selection =
+  | { kind: 'waste' }
+  | { kind: 'tableau'; column: number; cardId: string }
+  | { kind: 'foundation'; suit: PatienceSuit };
+
+function newGame(): PatienceState {
+  const seed = crypto.getRandomValues(new Uint32Array(1))[0] ?? Date.now();
+  return patienceGame.createInitialState(PLAYERS, createSeededRng(seed));
+}
+
+/** Altura (em larguras de carta) de uma coluna com as cartas empilhadas. */
+function columnHeight(total: number, down: number): number {
+  const downCount = Math.min(down, total);
+  return 1.35 + downCount * 0.14 + Math.max(total - downCount - 1, 0) * 0.32 + (total === 0 ? 0 : 0);
+}
+
+function CardFace({ card, selected }: { card: PatienceCard; selected?: boolean }) {
+  const url = cardFaceUrl(card);
+  return (
+    <span
+      aria-hidden="true"
+      className={`cnm-card ${selected ? 'cnm-card-selected' : ''}`}
+      style={url === undefined ? undefined : { backgroundImage: `url("${url}")` }}
+    >
+      {url === undefined ? `${card.value}${SUIT_SYMBOL[card.suit]}` : null}
+    </span>
+  );
+}
+
+function CardBack() {
+  const url = cardBackUrl();
+  return (
+    <span
+      aria-hidden="true"
+      className="cnm-card cnm-card-back"
+      style={url === undefined ? undefined : { backgroundImage: `url("${url}")` }}
+    />
+  );
+}
 
 /**
- * Mapeamento de naipes do core para nomes de arquivos de asset.
- * O core usa nomes internos (ouro, copa, espada, paus) e os mapeamos
- * para os arquivos reais que estão em Cards/.
- * convenção de nomes: card_diamond, card_heart, card_spade, card_clubs
- * (naipes portugueses: ouros=diamonds, copas=hearts, espadas=spades, paus=clubs).
- */
-const suitAssetMap: Record<string, string> = {
-  ouro: 'card_diamond',
-  copa: 'card_heart',
-  espada: 'card_spade',
-  paus: 'card_clubs',
-};
-
-/**
- * Componente de mesa de Paciência (Klondike) – modo single-player.
+ * Mesa de Paciência (Klondike, compra de 1 carta) — modo solo.
  *
- * Mobile‑first: layout vertical em small, reflow horizontal em md+.
- * Todas as interações passam pelo núcleo determinístico via `applyAction`.
- * É necessário clicar em "Nova Partida" para iniciar um novo jogo.
+ * Toda regra vive em `patienceGame` (núcleo determinístico); aqui só se
+ * escolhe a origem e o destino. Toque/clique em uma carta para selecioná-la e
+ * depois no destino; duplo clique envia a carta direto para a fundação.
  */
 export default function PatienceTable() {
-  const [showGame, setShowGame] = useState(false);
-  const [state, setState] = useState<PatienceState | null>(null);
-  const [events, setEvents] = useState<readonly PatienceEvent[]>([]);
+  const [state, setState] = useState<PatienceState>(() => newGame());
+  const [history, setHistory] = useState<readonly PatienceState[]>([]);
+  const [selection, setSelection] = useState<Selection | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
 
-  // --- Botão “Nova Partida” ---
-  const handleNewGame = () => {
-    setShowGame(true);
-  };
-
-  // --- Inicializa partida ao aceitar mostrar o jogo ---
   useEffect(() => {
-    if (!showGame) return;
-    const seed = Date.now() % 10000; // seed diferente a cada nova partida
-    const players = [
-      {
-        playerId: 'player-1',
-        seatIndex: 0,
-        nickname: 'Você',
-        avatarId: null,
-      } as const,
-    ];
-    const rng = patienceGame.createSeededRng
-      ? patienceGame.createSeededRng(seed)
-      : {
-          nextUint32: () => 0,
-        } as const;
-    const initial = patienceGame.createInitialState(players, rng);
-    setState(initial);
-    setEvents([]);
-  }, [showGame]);
+    if (message === null) return;
+    const timer = window.setTimeout(() => setMessage(null), 2200);
+    return () => window.clearTimeout(timer);
+  }, [message]);
 
-  // --- Se não houver estado, mostra tela inicial ---
-  if (!state) {
-    return (
-      <div className="min-h-[400px] flex flex-col items-center justify-center text-stone-700">
-        <p>Clique em "Nova Partida" para começar um jogo de Paciência</p>
-        <button
-          className="cnm-interactive mt-4 rounded-md bg-stone-900 px-4 py-2 font-semibold text-stone-50"
-          onClick={handleNewGame}
-          type="button"
-        >
-Nova Partida
-        </button>
-      </div>
-    );
-  }
+  const run = useCallback(
+    (payload: PatienceActionPayload): boolean => {
+      const result = patienceGame.applyAction(state, { playerId: PLAYER_ID, payload });
+      if (!result.ok) {
+        setMessage(result.error.message);
+        return false;
+      }
+      setHistory((h) => [...h, state]);
+      setState(result.state);
+      setSelection(null);
+      return true;
+    },
+    [state],
+  );
 
-  // --- Função para obter URL da carta ---
-  const getCardUrl = (card: PatienceCard, assetKey: keyof typeof suitAssetMap) => {
-    const idx = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'].indexOf(card.value) + 1;
-    return `/Cards/${suitAssetMap[assetKey]}_${idx}.png`;
+  const restart = () => {
+    setState(newGame());
+    setHistory([]);
+    setSelection(null);
+    setMessage(null);
   };
 
-  // --- Aplica ação no núcleo determinístico e atualiza estado/local events ---
-  function handleAction(action: PatienceActionPayload) {
-    const result = patienceGame.applyAction(state!, action);
-    if (result.ok) {
-      setState(result.state);
-      setEvents((ev) => [...ev, ...result.events]);
-    } else {
-      console.error('Ação inválida:', result.error);
+  const undo = () => {
+    const previous = history[history.length - 1];
+    if (previous === undefined) return;
+    setState(previous);
+    setHistory(history.slice(0, -1));
+    setSelection(null);
+  };
+
+  const sendSelectionToFoundation = (sel: Selection): boolean =>
+    sel.kind === 'waste'
+      ? run({ type: 'waste_to_foundation' })
+      : sel.kind === 'tableau'
+        ? run({ type: 'tableau_to_foundation', fromColumn: sel.column })
+        : false;
+
+  const onTableauClick = (column: number, card: PatienceCard | null) => {
+    if (selection === null) {
+      if (card !== null) setSelection({ kind: 'tableau', column, cardId: card.id });
+      return;
     }
-  }
+    if (selection.kind === 'tableau' && selection.column === column) {
+      setSelection(card === null || selection.cardId === card.id ? null : { kind: 'tableau', column, cardId: card.id });
+      return;
+    }
+    const moved =
+      selection.kind === 'waste'
+        ? run({ type: 'waste_to_tableau', toColumn: column })
+        : selection.kind === 'tableau'
+          ? run({ type: 'tableau_to_tableau', fromColumn: selection.column, toColumn: column, cardId: selection.cardId })
+          : run({ type: 'foundation_to_tableau', suit: selection.suit, toColumn: column });
+    if (!moved && card !== null) setSelection({ kind: 'tableau', column, cardId: card.id });
+  };
 
-  // --- Helpers de UI ---
+  const onFoundationClick = (suit: PatienceSuit) => {
+    const pile = state.foundations[PATIENCE_SUITS.indexOf(suit)] ?? [];
+    if (selection === null) {
+      if (pile.length > 0) setSelection({ kind: 'foundation', suit });
+      return;
+    }
+    if (!sendSelectionToFoundation(selection) && selection.kind === 'foundation') setSelection(null);
+  };
+
   const wasteTop = state.waste[state.waste.length - 1];
+  const inFoundations = state.foundations.reduce((sum, pile) => sum + pile.length, 0);
+  const won = state.status === 'finished';
 
-  // --- Render ---
   return (
-    <div className="min-h-[500px] bg-green-600/60 relative p-4 rounded-lg shadow-xl">
-      {/* ----- Header com botão Nova Partida ----- */}
-      <div className="flex justify-between items-center mb-4">
-        <h2 className="font-medium text-stone-200">Paciência (Klondike)</h2>
-        <button
-          className="cnm-interactive rounded-md bg-stone-900 px-3 py-1 font-sm text-stone-50"
-          onClick={handleNewGame}
-          type="button"
-        >
-Nova Partida
-        </button>
+    <section aria-label="Mesa de Paciência" className="cnm-felt">
+      <div className="flex flex-wrap items-center justify-between gap-2 pb-3">
+        <p className="text-sm font-semibold text-emerald-50" role="status">
+          Movimentos: {state.moves} · Fundações: {inFoundations}/52
+        </p>
+        <div className="flex gap-2">
+          <button className="cnm-btn" disabled={history.length === 0} onClick={undo} type="button">
+            Desfazer
+          </button>
+          <button className="cnm-btn" onClick={restart} type="button">
+            Nova partida
+          </button>
+        </div>
       </div>
 
-      {/* Instruções */}
-      <p className="text-xs opacity-80">
-        Clique em stock para virar | Clique em cartas para mover | Objetivo: mover Ás→Rei por naipe
+      <div className="cnm-board">
+        <div className="cnm-row">
+          <button
+            aria-label={state.stock.length > 0 ? `Virar carta do monte (${state.stock.length} restantes)` : 'Reciclar o descarte no monte'}
+            className="cnm-slot"
+            onClick={() => run({ type: 'flip_stock' })}
+            type="button"
+          >
+            {state.stock.length > 0 ? <CardBack /> : <span className="cnm-slot-hint">↻</span>}
+          </button>
+
+          <button
+            aria-label={wasteTop === undefined ? 'Descarte vazio' : `Descarte: ${cardName(wasteTop)}`}
+            className="cnm-slot"
+            disabled={wasteTop === undefined}
+            onClick={() => setSelection(selection?.kind === 'waste' ? null : { kind: 'waste' })}
+            onDoubleClick={() => sendSelectionToFoundation({ kind: 'waste' })}
+            type="button"
+          >
+            {wasteTop === undefined ? null : <CardFace card={wasteTop} selected={selection?.kind === 'waste'} />}
+          </button>
+
+          <span className="cnm-spacer" />
+
+          {PATIENCE_SUITS.map((suit, i) => {
+            const pile = state.foundations[i] ?? [];
+            const top = pile[pile.length - 1];
+            return (
+              <button
+                aria-label={`Fundação de ${suit}: ${pile.length} carta(s)`}
+                className="cnm-slot"
+                key={suit}
+                onClick={() => onFoundationClick(suit)}
+                type="button"
+              >
+                {top === undefined ? (
+                  <span className="cnm-slot-hint">{SUIT_SYMBOL[suit]}</span>
+                ) : (
+                  <CardFace card={top} selected={selection?.kind === 'foundation' && selection.suit === suit} />
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="cnm-row cnm-columns">
+          {state.tableau.map((column, colIdx) => {
+            const down = state.faceDown[colIdx] ?? 0;
+            const top = column[column.length - 1] ?? null;
+            return (
+              <div
+                className="cnm-column"
+                key={colIdx}
+                onClick={() => column.length === 0 && onTableauClick(colIdx, null)}
+                style={{ height: `calc(var(--cw) * ${columnHeight(column.length, down)})` }}
+              >
+                {column.length === 0 ? <span className="cnm-slot-hint">K</span> : null}
+                {column.map((card, idx) => {
+                  const isDown = idx < down;
+                  const offset = Math.min(idx, down) * 0.14 + Math.max(idx - down, 0) * 0.32;
+                  const isSelected =
+                    selection?.kind === 'tableau' &&
+                    selection.column === colIdx &&
+                    column.findIndex((c) => c.id === selection.cardId) <= idx;
+                  return (
+                    <button
+                      aria-label={isDown ? 'Carta virada para baixo' : cardName(card)}
+                      className="cnm-stacked"
+                      disabled={isDown}
+                      key={card.id}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onTableauClick(colIdx, card);
+                      }}
+                      onDoubleClick={() => card === top && sendSelectionToFoundation({ kind: 'tableau', column: colIdx, cardId: card.id })}
+                      style={{ top: `calc(var(--cw) * ${offset})` }}
+                      type="button"
+                    >
+                      {isDown ? <CardBack /> : <CardFace card={card} selected={isSelected} />}
+                    </button>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <p aria-live="polite" className="mt-3 min-h-6 text-sm text-amber-200" role="status">
+        {message}
       </p>
 
-      {/* Stock (monte principal) */}
-      <div
-        className="relative cursor-pointer select-none"
-        onClick={() => {
-          if (state?.stock.length > 0) handleAction({ type: 'flip_stock' });
-        }}
-        title={state?.stock.length > 0 ? 'Virar stock' : 'Stock vazio'}
-        aria-disabled={!((state?.stock.length ?? 0) > 0)}
-        style={{ opacity: ((state?.stock.length ?? 0) > 0) ? 1 : 0.5 }}
-      >
-        <div className="w-14 h-20 bg-green-800 text-white font-bold rounded border border-stone-600 flex items-center justify-center select-none">
-          {state?.stock.length > 0 ? `${state.stock.length}` : ''}
+      {won ? (
+        <div className="cnm-win" role="alertdialog" aria-label="Vitória">
+          <p className="text-3xl font-bold">Você venceu! 🎉</p>
+          <p className="text-sm">{state.moves} movimentos</p>
+          <button className="cnm-btn cnm-btn-gold" onClick={restart} type="button">
+            Jogar de novo
+          </button>
         </div>
-        {state?.stock.length > 0 && (
-          <div className="absolute -inset-1 rounded-md bg-green-800/50 backdrop-blur"></div>
-        )}
-      </div>
-
-      {/* Waste (descarte) */}
-      {state?.waste.length > 0 && (
-        <div
-          className="relative w-14 h-20 mb-4 bg-white rounded border border-stone-600 select-none"
-          title="Carta no descarte"
-        >
-          <div
-            className="absolute inset-0 flex items-center justify-center text-sm text-green-800 font-semibold"
-          >
-            {state.waste[state.waste.length - 1]?.value === 'A'
-              ? '1'
-              : state.waste[state.waste.length - 1]?.value === 'K'
-              ? 'K'
-              : state.waste[state.waste.length - 1]?.value?.charAt(0) || ''}
-          </div>
-        </div>
-      )}
-
-      {/* Tableau - 7 colunas */}
-      <div className="grid grid-cols-1 gap-2 md:grid-cols-7">
-        {state?.tableau.map((column, colIdx) => (
-          <div
-            key={colIdx}
-            className="relative rounded-border border-stone-600 bg-stone-800 p-1 min-h-[120px] transition-colors hover:bg-stone-700"
-            title={`Coluna ${colIdx + 1}: ${column.length} carta(s)`}
-          >
-            {column.map((card, cardIdx) => (
-              <div
-                key={cardIdx}
-                className="relative w-10 h-14 mb-1 rounded-t border border-stone-500 bg-white select-none ring-2 ring-green-500 opacity-100"
-                title={card.value}
-                style={{ backgroundImage: getCardUrl(card, card.suit as keyof typeof suitAssetMap) }}
-                aria-label={`Carta ${card.value} de ${card.suit}`}
-                onClick={() => handleCardClick(colIdx, card)}
-              >
-                <span className="absolute top-0 left-0 w-full h-full text-center text-xs text-green-400 font-medium">{card.value}</span>
-              </div>
-            ))}
-            {column.length > 1 && (
-              <div className="absolute bottom-0 left-0 right-0 p-1 text-xs text-stone-400">
-                +{column.length - 1} mais viradas para baixo
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-
-      {/* Fundações (4 pilhas) - com imagens de cartas */}
-{[0, 1, 2, 3].map((suitIdx) => {
-  const suit: 'ouro' | 'copa' | 'espada' | 'paus' = ['ouro', 'copa', 'espada', 'paus'][suitIdx];
-  const pile = state?.foundations?.[suitIdx];
-  const topCard = pile?.[pile.length - 1];
-  return (
-    <div
-      key={suit}
-      className="w-14 h-20 rounded-br-md border border-stone-600 bg-green-900 flex items-center justify-center select-none cursor-pointer hover:bg-green-800 transition-colors"
-      title={`Fundaçāo: ${pile?.length ?? 0} carta(s)`}
-    >
-      {pile?.length > 0 ? (
-        <div
-          className="relative w-full h-full"
-          style={{
-            backgroundImage:
-              topCard !== null
-                ? `/Cards/${suitAssetMap[suit]}_${['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'].indexOf(topCard.value) + 1}.png`
-                : 'none',
-          }}
-        >
-          <span
-            className="absolute top-0 left-0 w-full h-full text-center text-xs text-green-400 font-medium"
-          >
-            {topCard?.value}
-          </span>
-        </div>
-      ) : (
-        <div className="opacity-50 text-white">vazio</div>
-      )}
-    </div>
+      ) : null}
+    </section>
   );
-})}
-
-      {/* Células livres */}
-      <div className="mt-6 flex justify-between">
-{[0, 1, 2, 3].map((slotIdx) => (
-  <div
-    key={slotIdx}
-    className={`relative w-10 h-14 ${state?.freeCells?.[slotIdx] ? 'bg-white' : 'bg-stone-800'} rounded border border-stone-600 select-none cursor-pointer hover:bg-stone-700`}
-    title={state?.freeCells?.[slotIdx]
-      ? `Carta: ${state.freeCells[slotIdx].value}`
-      : 'Célula livre vazia'}
-    onClick={() => handleFreeCellClick(slotIdx)}
-  >
-    {state?.freeCells?.[slotIdx] ? (
-      <div className="absolute inset-0 flex items-center justify-center text-xs text-green-600 font-medium">
-        {state.freeCells[slotIdx].value}
-      </div>
-    ) : (
-      <span className="absolute top-1 left-1 text-xs text-stone-400">□</span>
-    )}
-  </div>
-))}
-      </div>
-
-      {/* Eventos recentes */}
-      <div className="mt-6 text-xs text-stone-300 max-h-48 overflow-y-auto">
-{(events.map((ev, i) => {
-  const typeLabels: Record<string, string> = {
-    card_moved: 'Carta movida',
-    turn_changed: 'Vez alterada',
-    game_finished: 'Partida finalizada',
-  };
-  const label = typeLabels[ev.type] || ev.type;
-  return <div key={i} className="flex items-start gap-2">
-    <span className="text-stone-500">▸</span>
-    <span>{`${label}: ${ev.cardId ?? ''}`}</span>
-  </div>;
-})}
-      </div>
-    </div>
-  );
-}
-
-/* ---------- Handlers de clique ---------- */
-
-// Clique em “Nova Partida”
-function handleNewGame() {
-  setShowGame(true);
-}
-
-// Clique em carta do tableau
-function handleCardClick(fromColumn: number, card: PatienceCard) {
-  // 1. Mover para fundação
-  for (let s = 0; s < 4; s += 1) {
-    if (patienceGame.canMoveToFoundations(card, state?.foundations?.[s] as readonly PatienceCard[], card.suit)) {
-      const action: PatienceActionPayload = {
-        type: 'move_from_tableau_to_foundations',
-        fromColumn,
-        suit: card.suit,
-      };
-      handleAction(action);
-      return;
-    }
-  }
-
-  // 2. Mover para célula livre (primeira vaga)
-  for (let slot = 0; slot < 4; slot += 1) {
-    if (!state?.freeCells?.[slot]) {
-      const action: PatienceActionPayload = {
-        type: 'move_from_tableau_to_free_cell',
-        fromColumn,
-        cardId: card.id,
-      };
-      handleAction(action);
-      return;
-    }
-  }
-
-  // 3. Mover para outra coluna do tableau
-  for (let toColumn = 0; toColumn < 7; toColumn += 1) {
-    const target = state?.tableau?.[toColumn];
-    if (!target?.length) {
-      if (card.value === 'K') {
-        const action: PatienceActionPayload = {
-          type: 'move_from_tableau_to_tableau',
-          fromColumn,
-          toColumn,
-          cardId: card.id,
-        };
-        handleAction(action);
-        return;
-      }
-    } else {
-      const topOfTarget = target[target.length - 1];
-      const cardIdx = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'].indexOf(card.value);
-      const topIdx = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'].indexOf(topOfTarget.value);
-      if (cardIdx === topIdx - 1 && card.color !== topOfTarget.color) {
-        const action: PatienceActionPayload = {
-          type: 'move_from_tableau_to_tableau',
-          fromColumn,
-          toColumn,
-          cardId: card.id,
-        };
-        handleAction(action);
-        return;
-      }
-    }
-  }
-}
-
-// Clique em célula livre
-function handleFreeCellClick(slotIdx: number) {
-  const card = state?.freeCells?.[slotIdx];
-  if (!card) return;
-
-  // 1. Para fundação
-  for (let s = 0; s < 4; s += 1) {
-    if (patienceGame.canMoveToFoundations(card, state?.foundations?.[s] as readonly PatienceCard[], card.suit)) {
-      const action: PatienceActionPayload = {
-        type: 'move_from_free_cell_to_foundations',
-        cardId: card.id,
-        suit: card.suit,
-      };
-      handleAction(action);
-      return;
-    }
-  }
-
-  // 2. Para tableau
-  for (let col = 0; col < 7; col += 1) {
-    const target = state?.tableau?.[col];
-    if (!target?.length) {
-      if (card.value === 'K') {
-        const action: PatienceActionPayload = {
-          type: 'move_from_free_cell_to_tableau',
-          cardId: card.id,
-          targetColumn: col,
-        };
-        handleAction(action);
-        return;
-      }
-    } else {
-      const topOfTarget = target[target.length - 1];
-      const cardIdx = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'].indexOf(card.value);
-      const topIdx = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'].indexOf(topOfTarget.value);
-      if (cardIdx === topIdx - 1 && card.color !== topOfTarget.color) {
-        const action: PatienceActionPayload = {
-          type: 'move_from_free_cell_to_tableau',
-          cardId: card.id,
-          targetColumn: col,
-        };
-        handleAction(action);
-        return;
-      }
-    }
-  }
-}
-
-// Clique em fundação (mover Rei de volta para coluna vazia)
-function handleFoundationClick(suitIdx: number) {
-  const pile = state?.foundations?.[suitIdx];
-  if (!pile?.length) return;
-  const topCard = pile[pile.length - 1];
-  if (topCard.value !== 'K') return;
-
-  for (let col = 0; col < 7; col += 1) {
-    if (!state?.tableau?.[col]?.length) {
-      const action: PatienceActionPayload = {
-        type: 'move_from_tableau_to_tableau',
-        fromColumn: -1,
-        toColumn: col,
-        cardId: topCard.id,
-      };
-      handleAction(action);
-      return;
-    }
-  }
 }

@@ -46,3 +46,139 @@
     scroll-behavior: auto !important;
   }
 }
+
+/* ------------------------------------------------------------------ *
+ * Mesa de feltro (Paciência)
+ * ------------------------------------------------------------------ */
+.cnm-felt {
+  position: relative;
+  border-radius: 1rem;
+  padding: 1rem;
+  color: #ecfdf5;
+  background:
+    radial-gradient(ellipse at 50% 30%, #15803d 0%, #166534 45%, #14532d 100%);
+  box-shadow:
+    inset 0 0 0 6px #422006,
+    inset 0 0 0 8px #a16207,
+    0 18px 40px -12px rgb(0 0 0 / 0.55);
+}
+
+.cnm-board {
+  container-type: inline-size;
+  padding: 0.5rem;
+}
+
+.cnm-board {
+  --gap: clamp(4px, 1.4cqw, 14px);
+  --cw: calc((100cqw - 6 * var(--gap)) / 7);
+}
+
+.cnm-row {
+  display: grid;
+  grid-template-columns: repeat(7, var(--cw));
+  gap: var(--gap);
+  align-items: start;
+}
+
+.cnm-columns {
+  margin-top: calc(var(--cw) * 0.35);
+}
+
+.cnm-spacer {
+  display: block;
+}
+
+.cnm-slot,
+.cnm-column {
+  position: relative;
+  width: var(--cw);
+  min-height: calc(var(--cw) * 1.35);
+  border-radius: calc(var(--cw) * 0.08);
+  border: 2px dashed rgb(236 253 245 / 0.28);
+  background: rgb(0 0 0 / 0.12);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cnm-slot-hint {
+  font-size: calc(var(--cw) * 0.45);
+  color: rgb(236 253 245 / 0.35);
+  user-select: none;
+}
+
+.cnm-stacked {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  padding: 0;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.cnm-stacked:disabled {
+  cursor: default;
+}
+
+.cnm-card {
+  display: block;
+  width: 100%;
+  aspect-ratio: 800 / 1080;
+  background-size: 100% 100%;
+  background-color: #fff;
+  border-radius: calc(var(--cw) * 0.07);
+  box-shadow: 0 2px 5px rgb(0 0 0 / 0.45);
+  color: #111827;
+  font-weight: 700;
+}
+
+.cnm-card-back {
+  background-color: #1e3a8a;
+}
+
+.cnm-card-selected {
+  outline: 3px solid #facc15;
+  outline-offset: -1px;
+  box-shadow: 0 0 14px 2px rgb(250 204 21 / 0.8);
+}
+
+.cnm-slot:has(> .cnm-card),
+.cnm-slot:has(> .cnm-card):disabled {
+  border-style: solid;
+  border-color: transparent;
+  background: none;
+}
+
+.cnm-btn {
+  border-radius: 0.5rem;
+  background: #fefce8;
+  color: #422006;
+  padding: 0.4rem 0.9rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  box-shadow: 0 1px 0 #a16207;
+}
+
+.cnm-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.cnm-btn-gold {
+  background: #facc15;
+}
+
+.cnm-win {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  border-radius: 1rem;
+  background: rgb(2 44 34 / 0.88);
+  text-align: center;
+}

@@ -1,34 +1,19 @@
 import {
   InvalidSetupError,
-  UnknownPlayerError,
   type ApplyResult,
-  type GameDefinition,
   type EngineAction,
-  type EngineError,
+  type GameDefinition,
   type PlayerSeed,
 } from './game-definition';
-
-import { createSeededRng, shuffle, type Rng } from './rng';
+import { shuffle, type Rng } from './rng';
 
 // ---------------------------------------------------------------------------
-// Card types
+// Cartas
 // ---------------------------------------------------------------------------
 
 export type PatienceSuit = 'ouro' | 'copa' | 'espada' | 'paus';
 export type PatienceValue =
-  | 'A'
-  | '2'
-  | '3'
-  | '4'
-  | '5'
-  | '6'
-  | '7'
-  | '8'
-  | '9'
-  | '10'
-  | 'J'
-  | 'Q'
-  | 'K';
+  | 'A' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' | '10' | 'J' | 'Q' | 'K';
 
 export interface PatienceCard {
   suit: PatienceSuit;
@@ -36,716 +21,353 @@ export interface PatienceCard {
   id: string;
 }
 
-// Derived: color for alternating moves in the tableau
-export function cardColor(card: PatienceCard): 'vermelho' | 'preto' {
-  return card.suit === 'ouro' || card.suit === 'paus' ? 'vermelho' : 'preto';
-}
-
-// Order of values for comparison
-const VALUE_ORDER: readonly PatienceValue[] = [
+export const PATIENCE_SUITS: readonly PatienceSuit[] = ['ouro', 'copa', 'espada', 'paus'];
+export const PATIENCE_VALUES: readonly PatienceValue[] = [
   'A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K',
 ];
 
-function valueIndex(v: PatienceValue): number {
-  const i = VALUE_ORDER.indexOf(v);
-  if (i === -1) throw new Error(`Valor de carta inválido: ${v}`);
-  return i;
+/** Ouros (♦) e copas (♥) são vermelhos; espadas (♠) e paus (♣) são pretos. */
+export function cardColor(card: PatienceCard): 'vermelho' | 'preto' {
+  return card.suit === 'ouro' || card.suit === 'copa' ? 'vermelho' : 'preto';
 }
 
-// ---------------------------------------------------------------------------
-// Deck construction
-// ---------------------------------------------------------------------------
-
-const SUIT_CHARS = { ouro: 'o', copa: 'c', espada: 'e', paus: 'p' };
-
-function suitChar(suit: PatienceSuit): string {
-  return SUIT_CHARS[suit];
+/** 1 (Ás) a 13 (Rei). */
+export function cardRank(card: PatienceCard): number {
+  return PATIENCE_VALUES.indexOf(card.value) + 1;
 }
 
-// Creates a complete 52-card deck with unique string IDs
 export function createDeck(): readonly PatienceCard[] {
-  const suits: PatienceSuit[] = ['ouro', 'copa', 'espada', 'paus'];
+  const chars: Record<PatienceSuit, string> = { ouro: 'o', copa: 'c', espada: 'e', paus: 'p' };
   const cards: PatienceCard[] = [];
-  let counter = 0;
-  for (const suit of suits) {
-    for (const value of VALUE_ORDER) {
-      cards.push({
-        suit,
-        value,
-        id: `${suitChar(suit)}-${value}-${counter++}`,
-      });
+  for (const suit of PATIENCE_SUITS) {
+    for (const value of PATIENCE_VALUES) {
+      cards.push({ suit, value, id: `${chars[suit]}-${value}` });
     }
   }
   return cards;
 }
 
 // ---------------------------------------------------------------------------
-// Game state - use plain arrays, readonly is a static contract
+// Estado: Paciência Klondike, compra de 1 carta
 // ---------------------------------------------------------------------------
 
 export type PatienceState = {
   status: 'playing' | 'finished';
   currentTurnPlayerId: string;
+  /** Monte: a próxima carta a virar é a ÚLTIMA do array. */
   stock: PatienceCard[];
+  /** Descarte: a carta do topo é a ÚLTIMA do array. */
   waste: PatienceCard[];
+  /** Colunas: do fundo (índice 0) ao topo. As `faceDown[col]` primeiras estão viradas para baixo. */
   tableau: PatienceCard[][];
+  faceDown: number[];
+  /** Uma pilha por naipe, na ordem de PATIENCE_SUITS. */
   foundations: PatienceCard[][];
-  freeCells: (PatienceCard | null)[];
+  moves: number;
 };
-
-// ---------------------------------------------------------------------------
-// Action payload types
-// ---------------------------------------------------------------------------
-
-export type PatienceActionType =
-  | 'flip_stock'
-  | 'move_to_foundations'
-  | 'move_to_free_cell'
-  | 'move_from_free_cell_to_tableau'
-  | 'move_from_free_cell_to_foundations'
-  | 'move_from_tableau_to_free_cell'
-  | 'move_from_tableau_to_foundations'
-  | 'move_from_tableau_to_tableau';
 
 export type PatienceActionPayload =
   | { type: 'flip_stock' }
-  | { type: 'move_to_foundations'; cardId: string; suit: PatienceSuit }
-  | { type: 'move_to_free_cell'; cardId: string }
-  | {
-      type: 'move_from_free_cell_to_tableau';
-      cardId: string;
-      targetColumn: number;
-    }
-  | {
-      type: 'move_from_free_cell_to_foundations';
-      cardId: string;
-      suit: PatienceSuit;
-    }
-  | {
-      type: 'move_from_tableau_to_free_cell';
-      fromColumn: number;
-      cardId: string;
-    }
-  | {
-      type: 'move_from_tableau_to_foundations';
-      fromColumn: number;
-      suit: PatienceSuit;
-    }
-  | {
-      type: 'move_from_tableau_to_tableau';
-      fromColumn: number;
-      toColumn: number;
-      cardId: string;
-    };
+  | { type: 'waste_to_foundation' }
+  | { type: 'waste_to_tableau'; toColumn: number }
+  | { type: 'tableau_to_foundation'; fromColumn: number }
+  | { type: 'tableau_to_tableau'; fromColumn: number; toColumn: number; cardId: string }
+  | { type: 'foundation_to_tableau'; suit: PatienceSuit; toColumn: number };
+
+export type PatienceEvent =
+  | { type: 'card_moved'; cardId: string; from: string; to: string }
+  | { type: 'stock_recycled' }
+  | { type: 'game_finished'; outcome: 'win' };
+
+export type PatiencePublicView = {
+  gameId: string;
+  status: PatienceState['status'];
+  stockCount: number;
+  wasteTop: PatienceCard | null;
+  tableauHeights: readonly number[];
+  foundationHeights: readonly number[];
+};
 
 // ---------------------------------------------------------------------------
-// Helper: find card in array by id
+// Regras (puras)
 // ---------------------------------------------------------------------------
 
-function findCardById<T extends { readonly id: string }>(
-  array: readonly T[],
-  id: string,
-): T | undefined {
-  for (const c of array) {
-    if (c.id === id) return c;
-  }
-  return undefined;
+export function canPlaceOnFoundation(card: PatienceCard, pile: readonly PatienceCard[]): boolean {
+  const top = pile[pile.length - 1];
+  if (top === undefined) return card.value === 'A';
+  return top.suit === card.suit && cardRank(card) === cardRank(top) + 1;
 }
 
-// Helpers for foundation logic
-function canMoveToFoundations(
-  card: PatienceCard,
-  foundationPile: readonly PatienceCard[],
-  suit: PatienceSuit,
-): boolean {
-  if (foundationPile.length === 0) {
-    return card.value === 'A' && card.suit === suit;
-  }
-  const top = foundationPile[foundationPile.length - 1];
-  const nextIdx = valueIndex(top.value) + 1;
-  return nextIdx === valueIndex(card.value) && card.suit === suit;
+export function canPlaceOnTableau(card: PatienceCard, column: readonly PatienceCard[]): boolean {
+  const top = column[column.length - 1];
+  if (top === undefined) return card.value === 'K';
+  return cardRank(card) === cardRank(top) - 1 && cardColor(card) !== cardColor(top);
 }
 
-// Helpers for tableau logic
-function willFitOnTableau(
-  card: PatienceCard,
-  targetColumn: readonly PatienceCard[],
-): boolean {
-  if (targetColumn.length === 0) {
-    return card.value === 'K';
-  }
-  const top = targetColumn[targetColumn.length - 1];
-  const topIdx = valueIndex(top.value);
-  const cardIdx = valueIndex(card.value);
-  if (cardIdx !== topIdx - 1) {
-    return false;
-  }
-  return cardColor(card) !== cardColor(top);
+function suitIndex(suit: PatienceSuit): number {
+  return PATIENCE_SUITS.indexOf(suit);
+}
+
+function fail(code: 'invalid_setup' | 'card_not_in_hand', message: string) {
+  return { ok: false as const, error: { code, message } };
 }
 
 // ---------------------------------------------------------------------------
-// createInitialState
+// Estado inicial
 // ---------------------------------------------------------------------------
 
-function setupTableau(columns: number, deck: readonly PatienceCard[]): PatienceCard[][] {
-  const result: PatienceCard[][] = [];
-  let idx = 0;
-  for (let col = 0; col < columns; col += 1) {
-    const column: PatienceCard[] = [];
-    for (let i = 0; i <= col; i += 1) {
-      column.push(deck[idx++]);
-    }
-    result.push(column);
-  }
-  return result;
-}
-
-export function createInitialState(
-  players: readonly PlayerSeed[],
-  rng: Rng,
-): PatienceState {
-  if (players.length === 0) {
+export function createInitialState(players: readonly PlayerSeed[], rng: Rng): PatienceState {
+  const first = players[0];
+  if (first === undefined) {
     throw new InvalidSetupError('Paciência requer pelo menos 1 jogador.');
   }
-
   const deck = shuffle(createDeck(), rng);
-  const tableau = setupTableau(7, deck);
-
-  // 28 cartas distribuídas no tableau (1+2+...+7); o resto vira stock
-  const stock: PatienceCard[] = deck.slice(28);
-  const waste: PatienceCard[] = [];
-
-  const foundations: PatienceCard[][] = [[], [], [], []];
-  const freeCells: (PatienceCard | null)[] = [null, null, null, null];
-
-  const playerId = players[0].playerId;
-
+  const tableau: PatienceCard[][] = [];
+  let next = 0;
+  for (let col = 0; col < 7; col += 1) {
+    tableau.push(deck.slice(next, next + col + 1));
+    next += col + 1;
+  }
   return {
     status: 'playing',
-    currentTurnPlayerId: playerId,
-    stock,
-    waste,
+    currentTurnPlayerId: first.playerId,
+    stock: deck.slice(next),
+    waste: [],
     tableau,
-    foundations,
-    freeCells,
+    faceDown: tableau.map((column) => column.length - 1),
+    foundations: [[], [], [], []],
+    moves: 0,
   };
 }
 
 // ---------------------------------------------------------------------------
-// legalActions
+// Ações legais
 // ---------------------------------------------------------------------------
 
-function legalActions(
-  state: PatienceState,
-  playerId: string,
-): readonly PatienceActionPayload[] {
-  if (state.currentTurnPlayerId !== playerId) {
-    return [];
-  }
-
+function legalActions(state: PatienceState, playerId: string): readonly PatienceActionPayload[] {
+  if (state.status === 'finished' || state.currentTurnPlayerId !== playerId) return [];
   const actions: PatienceActionPayload[] = [];
 
-  // 1. Flip stock
-  if (state.stock.length > 0) {
-    actions.push({ type: 'flip_stock' });
-  }
+  if (state.stock.length > 0 || state.waste.length > 0) actions.push({ type: 'flip_stock' });
 
-  // 2. Move from waste to foundations
-  if (state.waste.length > 0) {
-    const top = state.waste[state.waste.length - 1];
-    for (let s = 0; s < 4; s += 1) {
-      const suit: PatienceSuit = ['ouro', 'copa', 'espada', 'paus'][s];
-      if (canMoveToFoundations(top as PatienceCard, state.foundations[s] as readonly PatienceCard[], suit)) {
-        actions.push({ type: 'move_to_foundations', cardId: top.id, suit });
-      }
+  const wasteTop = state.waste[state.waste.length - 1];
+  if (wasteTop !== undefined) {
+    if (canPlaceOnFoundation(wasteTop, state.foundations[suitIndex(wasteTop.suit)] ?? [])) {
+      actions.push({ type: 'waste_to_foundation' });
     }
+    state.tableau.forEach((column, toColumn) => {
+      if (canPlaceOnTableau(wasteTop, column)) actions.push({ type: 'waste_to_tableau', toColumn });
+    });
   }
 
-  // 3. Move from waste to tableau columns
-  if (state.waste.length > 0) {
-    const top = state.waste[state.waste.length - 1];
-    for (let col = 0; col < 7; col += 1) {
-      if (willFitOnTableau(top as PatienceCard, state.tableau[col] as readonly PatienceCard[])) {
-        actions.push({
-          type: 'move_from_tableau_to_tableau',
-          cardId: top.id,
-          fromColumn: -1,
-          toColumn: col,
-        });
-      }
-    }
-  }
-
-  // 4. Move from tableau to foundations
-  for (let col = 0; col < 7; col += 1) {
-    const column = state.tableau[col] as readonly PatienceCard[];
-    if (column.length === 0) continue;
+  state.tableau.forEach((column, fromColumn) => {
     const top = column[column.length - 1];
-    for (let s = 0; s < 4; s += 1) {
-      const suit: PatienceSuit = ['ouro', 'copa', 'espada', 'paus'][s];
-      if (canMoveToFoundations(top as PatienceCard, state.foundations[s] as readonly PatienceCard[], suit)) {
-        actions.push({
-          type: 'move_from_tableau_to_foundations',
-          fromColumn: col,
-          suit,
-          cardId: top.id,
-        });
-      }
+    if (top !== undefined && canPlaceOnFoundation(top, state.foundations[suitIndex(top.suit)] ?? [])) {
+      actions.push({ type: 'tableau_to_foundation', fromColumn });
     }
-  }
+    for (let i = state.faceDown[fromColumn] ?? 0; i < column.length; i += 1) {
+      const card = column[i];
+      if (card === undefined) continue;
+      state.tableau.forEach((target, toColumn) => {
+        // Rei sozinho numa coluna vazia não é um movimento útil.
+        if (toColumn === fromColumn || (card.value === 'K' && i === 0 && target.length === 0)) return;
+        if (canPlaceOnTableau(card, target)) {
+          actions.push({ type: 'tableau_to_tableau', fromColumn, toColumn, cardId: card.id });
+        }
+      });
+    }
+  });
 
-  // 5. Move from tableau to free cells
-  for (let col = 0; col < 7; col += 1) {
-    const column = state.tableau[col] as readonly PatienceCard[];
-    if (column.length === 0) continue;
-    const top = column[column.length - 1];
-    for (let slot = 0; slot < 4; slot += 1) {
-      if (state.freeCells[slot] === null) {
-        actions.push({
-          type: 'move_from_tableau_to_free_cell',
-          fromColumn: col,
-          cardId: top.id,
-        });
-      }
-    }
-  }
-
-  // 6. Move from free cells to foundations
-  for (let slot = 0; slot < 4; slot += 1) {
-    const card = state.freeCells[slot];
-    if (card === null) continue;
-    for (let s = 0; s < 4; s += 1) {
-      const suit: PatienceSuit = ['ouro', 'copa', 'espada', 'paus'][s];
-      if (canMoveToFoundations(card as PatienceCard, state.foundations[s] as readonly PatienceCard[], suit)) {
-        actions.push({
-          type: 'move_from_free_cell_to_foundations',
-          cardId: card.id,
-          suit,
-        });
-      }
-    }
-  }
-
-  // 7. Move from free cells to tableau
-  for (let slot = 0; slot < 4; slot += 1) {
-    const card = state.freeCells[slot];
-    if (card === null) continue;
-    for (let col = 0; col < 7; col += 1) {
-      if (willFitOnTableau(card as PatienceCard, state.tableau[col] as readonly PatienceCard[])) {
-        actions.push({
-          type: 'move_from_free_cell_to_tableau',
-          cardId: card.id,
-          targetColumn: col,
-        });
-      }
-    }
-  }
+  PATIENCE_SUITS.forEach((suit, s) => {
+    const top = state.foundations[s]?.[(state.foundations[s]?.length ?? 0) - 1];
+    if (top === undefined) return;
+    state.tableau.forEach((column, toColumn) => {
+      if (canPlaceOnTableau(top, column)) actions.push({ type: 'foundation_to_tableau', suit, toColumn });
+    });
+  });
 
   return actions;
 }
 
 // ---------------------------------------------------------------------------
-// applyAction
+// Aplicar ação
 // ---------------------------------------------------------------------------
+
+/** Vira a carta do topo de uma coluna se todas as cartas dela estiverem viradas para baixo. */
+function revealTop(faceDown: readonly number[], column: number, remaining: number): number[] {
+  return faceDown.map((n, i) => (i === column ? Math.min(n, Math.max(remaining - 1, 0)) : n));
+}
+
+function finish(state: PatienceState, events: PatienceEvent[]): ApplyResult<PatienceState, PatienceEvent> {
+  const moved = { ...state, moves: state.moves + 1 };
+  if (moved.foundations.reduce((sum, pile) => sum + pile.length, 0) === 52) {
+    return {
+      ok: true,
+      state: { ...moved, status: 'finished' },
+      events: [...events, { type: 'game_finished', outcome: 'win' }],
+    };
+  }
+  return { ok: true, state: moved, events };
+}
 
 function applyAction(
   state: PatienceState,
   action: EngineAction<PatienceActionPayload>,
 ): ApplyResult<PatienceState, PatienceEvent> {
   if (state.status === 'finished') {
-    return {
-      ok: false,
-      error: { code: 'game_finished', message: 'A partida já terminou.' },
-    };
+    return { ok: false, error: { code: 'game_finished', message: 'A partida já terminou.' } };
   }
   if (state.currentTurnPlayerId !== action.playerId) {
-    return {
-      ok: false,
-      error: { code: 'not_your_turn', message: 'Não é o seu turno.' },
-    };
+    return { ok: false, error: { code: 'not_your_turn', message: 'Não é o seu turno.' } };
   }
 
-  // Helper to get suit index
-  const suitIdx = (s: string): number => ['ouro', 'copa', 'espada', 'paus'].indexOf(s);
-
-  switch (action.payload.type) {
+  const p = action.payload;
+  switch (p.type) {
     case 'flip_stock': {
       if (state.stock.length === 0) {
-        return {
-          ok: false,
-          error: { code: 'invalid_setup', message: 'Stock vazio.' },
-        };
+        if (state.waste.length === 0) return fail('invalid_setup', 'Monte e descarte vazios.');
+        return finish(
+          { ...state, stock: [...state.waste].reverse(), waste: [] },
+          [{ type: 'stock_recycled' }],
+        );
       }
-      const newWaste = [state.stock[0], ...state.waste];
-      const newStock = state.stock.slice(1);
-      return {
-        ok: true,
-        state: {
-          ...state,
-          waste: newWaste,
-          stock: newStock,
-        },
-        events: [
-          { type: 'card_moved', cardId: newWaste[0]!.id, from: 'stock', to: 'waste' },
-        ],
-      };
-    }
-
-    case 'move_to_foundations': {
-      const { cardId, suit } = action.payload;
-      const suitNumber = suitIdx(suit);
-      if (suitNumber === -1) {
-        return {
-          ok: false,
-          error: { code: 'invalid_setup', message: 'Naipe inválido.' },
-        };
-      }
-      const topWasteCard = state.waste[state.waste.length - 1] as PatienceCard;
-      if (topWasteCard.id !== cardId) {
-        return {
-          ok: false,
-          error: { code: 'card_not_in_hand', message: 'Carta não está no waste.' },
-        };
-      }
-      const newWaste = state.waste.slice(0, -1);
-
-      const newFoundations = state.foundations.map((pile, i) => {
-        if (i === suitNumber) {
-          return [...pile, topWasteCard];
-        }
-        return pile;
-      });
-
-      return {
-        ok: true,
-        state: {
-          ...state,
-          waste: newWaste,
-          foundations: newFoundations,
-        },
-        events: [
-          { type: 'card_moved', cardId: topWasteCard.id, from: 'waste', to: 'foundations' },
-        ],
-      };
-    }
-
-    case 'move_from_tableau_to_foundations': {
-      const { fromColumn, suit } = action.payload;
-      const suitNumber = suitIdx(suit);
-      if (suitNumber === -1) {
-        return {
-          ok: false,
-          error: { code: 'invalid_setup', message: 'Naipe inválido.' },
-        };
-      }
-      const column = state.tableau[fromColumn] as readonly PatienceCard[];
-      if (column.length === 0) {
-        return { ok: false, error: { code: 'card_not_in_hand', message: 'Nenhuma carta na coluna.' } };
-      }
-      const topCard = column[column.length - 1] as PatienceCard;
-// Card identified as the top of the tableau column; no payload.cardId needed
-      const newTableau = state.tableau.map((c, i) =>
-        i === fromColumn ? c.slice(0, -1) : c,
+      const card = state.stock[state.stock.length - 1] as PatienceCard;
+      return finish(
+        { ...state, stock: state.stock.slice(0, -1), waste: [...state.waste, card] },
+        [{ type: 'card_moved', cardId: card.id, from: 'stock', to: 'waste' }],
       );
-
-      const newFoundations = state.foundations.map((pile, i) => {
-        if (i === suitNumber) {
-          return [...pile, topCard];
-        }
-        return pile;
-      });
-
-      return {
-        ok: true,
-        state: {
-          ...state,
-          tableau: newTableau,
-          foundations: newFoundations,
-        },
-        events: [
-          { type: 'card_moved', cardId: topCard.id, from: 'tableau', to: 'foundations' },
-        ],
-      };
     }
 
-    case 'move_from_tableau_to_free_cell': {
-      const { fromColumn, cardId } = action.payload;
-      const column = state.tableau[fromColumn] as readonly PatienceCard[];
-      if (column.length === 0) {
-        return { ok: false, error: { code: 'card_not_in_hand', message: 'Nenhuma carta na coluna.' } };
+    case 'waste_to_foundation': {
+      const card = state.waste[state.waste.length - 1];
+      if (card === undefined) return fail('card_not_in_hand', 'O descarte está vazio.');
+      const s = suitIndex(card.suit);
+      if (!canPlaceOnFoundation(card, state.foundations[s] ?? [])) {
+        return fail('invalid_setup', 'Essa carta não cabe na fundação.');
       }
-      const topCard = column[column.length - 1] as PatienceCard;
-      if (topCard.id !== cardId) {
-        return {
-          ok: false,
-          error: { code: 'card_not_in_hand', message: 'Carta não está na coluna.' },
-        };
-      }
-
-      let emptySlot = -1;
-      for (let s = 0; s < 4; s += 1) {
-        if (state.freeCells[s] === null) {
-          emptySlot = s;
-          break;
-        }
-      }
-      if (emptySlot === -1) {
-        return {
-          ok: false,
-          error: { code: 'invalid_setup', message: 'Nenhuma célula livre disponível.' },
-        };
-      }
-
-      const newFreeCells = [...state.freeCells];
-      newFreeCells[emptySlot] = topCard;
-
-      const newTableau = state.tableau.map((c, i) =>
-        i === fromColumn ? c.slice(0, -1) : c,
+      return finish(
+        {
+          ...state,
+          waste: state.waste.slice(0, -1),
+          foundations: state.foundations.map((pile, i) => (i === s ? [...pile, card] : pile)),
+        },
+        [{ type: 'card_moved', cardId: card.id, from: 'waste', to: 'foundation' }],
       );
-
-      return {
-        ok: true,
-        state: {
-          ...state,
-          tableau: newTableau,
-          freeCells: newFreeCells,
-        },
-        events: [
-          { type: 'card_moved', cardId: topCard.id, from: 'tableau', to: 'free_cell' },
-        ],
-      };
     }
 
-    case 'move_from_free_cell_to_foundations': {
-      const { cardId, suit } = action.payload;
-      const card = state.freeCells.find((c) => c?.id === cardId);
-      if (!card) {
-        return { ok: false, error: { code: 'card_not_in_hand', message: 'Carta não está na célula livre.' } };
-      }
-
-      const suitNumber = suitIdx(suit);
-      if (suitNumber === -1) {
-        return {
-          ok: false,
-          error: { code: 'invalid_setup', message: 'Naipe inválido.' },
-        };
-      }
-
-      const newFreeCells = state.freeCells.map((c) => (c?.id === cardId ? null : c));
-
-      const newFoundations = state.foundations.map((pile, i) => {
-        if (i === suitNumber) {
-          return [...pile, card];
-        }
-        return pile;
-      });
-
-      return {
-        ok: true,
-        state: {
+    case 'waste_to_tableau': {
+      const card = state.waste[state.waste.length - 1];
+      const target = state.tableau[p.toColumn];
+      if (card === undefined) return fail('card_not_in_hand', 'O descarte está vazio.');
+      if (target === undefined) return fail('invalid_setup', 'Coluna inválida.');
+      if (!canPlaceOnTableau(card, target)) return fail('invalid_setup', 'Essa carta não cabe na coluna.');
+      return finish(
+        {
           ...state,
-          freeCells: newFreeCells,
-          foundations: newFoundations,
+          waste: state.waste.slice(0, -1),
+          tableau: state.tableau.map((col, i) => (i === p.toColumn ? [...col, card] : col)),
         },
-        events: [
-          { type: 'card_moved', cardId: card.id, from: 'free_cell', to: 'foundations' },
-        ],
-      };
-    }
-
-    case 'move_from_free_cell_to_tableau': {
-      const { cardId, targetColumn } = action.payload;
-      const card = state.freeCells.find((c) => c?.id === cardId);
-      if (!card) {
-        return { ok: false, error: { code: 'card_not_in_hand', message: 'Carta não está na célula livre.' } };
-      }
-
-      const target = state.tableau[targetColumn] as readonly PatienceCard[];
-      if (!willFitOnTableau(card as PatienceCard, target)) {
-        return {
-          ok: false,
-          error: { code: 'invalid_setup', message: 'A carta não cabe na coluna alvo.' },
-        };
-      }
-
-      const newFreeCells = state.freeCells.map((c) => (c?.id === cardId ? null : c));
-
-      const newTableau = state.tableau.map((col, i) =>
-        i === targetColumn ? [...col, card] : col,
+        [{ type: 'card_moved', cardId: card.id, from: 'waste', to: 'tableau' }],
       );
-
-      return {
-        ok: true,
-        state: {
-          ...state,
-          tableau: newTableau,
-          freeCells: newFreeCells,
-        },
-        events: [
-          { type: 'card_moved', cardId: card.id, from: 'free_cell', to: 'tableau' },
-        ],
-      };
     }
 
-    case 'move_from_tableau_to_tableau': {
-      const { fromColumn, toColumn, cardId } = action.payload;
-      const fromColumnData = state.tableau[fromColumn] as readonly PatienceCard[];
-      if (fromColumnData.length === 0) {
-        return { ok: false, error: { code: 'card_not_in_hand', message: 'Nenhuma carta na coluna de origem.' } };
+    case 'tableau_to_foundation': {
+      const column = state.tableau[p.fromColumn];
+      const card = column?.[column.length - 1];
+      if (column === undefined || card === undefined) return fail('card_not_in_hand', 'Coluna vazia.');
+      const s = suitIndex(card.suit);
+      if (!canPlaceOnFoundation(card, state.foundations[s] ?? [])) {
+        return fail('invalid_setup', 'Essa carta não cabe na fundação.');
       }
-      const topCard = fromColumnData[fromColumnData.length - 1] as PatienceCard;
-      if (topCard.id !== cardId) {
-        return {
-          ok: false,
-          error: { code: 'card_not_in_hand', message: 'Carta não está na coluna de origem.' },
-        };
-      }
-
-      // Remover da coluna de origem
-      const newFrom = fromColumnData.slice(0, -1);
-
-      // Verificar se cabe na coluna de destino
-      const toColumnData = state.tableau[toColumn] as readonly PatienceCard[];
-      if (toColumnData.length === 0) {
-        // Coluna vazia só aceita Rei
-        if (topCard.value !== 'K') {
-          return {
-            ok: false,
-            error: {
-              code: 'invalid_setup',
-              message: 'Apenas Reis podem ser colocados em colunas vazias.',
-            },
-          };
-        }
-      } else {
-        const topOfTarget = toColumnData[toColumnData.length - 1] as PatienceCard;
-        const topIdx = valueIndex(topOfTarget.value);
-        const cardIdx = valueIndex(topCard.value);
-        if (cardIdx !== topIdx - 1) {
-          return {
-            ok: false,
-            error: { code: 'invalid_setup', message: 'Carta não segue a sequência da coluna destino.' },
-          };
-        }
-        if (cardColor(topCard) === cardColor(topOfTarget)) {
-          return {
-            ok: false,
-            error: { code: 'invalid_setup', message: 'As cartas devem ter cores alternadas.' },
-          };
-        }
-      }
-
-      const newTo = [...toColumnData, topCard];
-      const newTableau = state.tableau.map((col, i) =>
-        i === fromColumn ? newFrom : i === toColumn ? newTo : col,
+      return finish(
+        {
+          ...state,
+          tableau: state.tableau.map((col, i) => (i === p.fromColumn ? col.slice(0, -1) : col)),
+          faceDown: revealTop(state.faceDown, p.fromColumn, column.length - 1),
+          foundations: state.foundations.map((pile, i) => (i === s ? [...pile, card] : pile)),
+        },
+        [{ type: 'card_moved', cardId: card.id, from: 'tableau', to: 'foundation' }],
       );
-
-      return {
-        ok: true,
-        state: {
-          ...state,
-          tableau: newTableau,
-        },
-        events: [
-          { type: 'card_moved', cardId: topCard.id, from: 'tableau', to: 'tableau' },
-        ],
-      };
     }
 
-    default:
-      return {
-        ok: false,
-        error: { code: 'invalid_setup', message: 'Ação não reconhecida.' },
-      };
+    case 'tableau_to_tableau': {
+      const from = state.tableau[p.fromColumn];
+      const to = state.tableau[p.toColumn];
+      if (from === undefined || to === undefined || p.fromColumn === p.toColumn) {
+        return fail('invalid_setup', 'Coluna inválida.');
+      }
+      const start = from.findIndex((c) => c.id === p.cardId);
+      if (start === -1 || start < (state.faceDown[p.fromColumn] ?? 0)) {
+        return fail('card_not_in_hand', 'Carta indisponível na coluna de origem.');
+      }
+      const run = from.slice(start);
+      if (!canPlaceOnTableau(run[0] as PatienceCard, to)) {
+        return fail('invalid_setup', 'Essa carta não cabe na coluna de destino.');
+      }
+      return finish(
+        {
+          ...state,
+          tableau: state.tableau.map((col, i) =>
+            i === p.fromColumn ? from.slice(0, start) : i === p.toColumn ? [...to, ...run] : col,
+          ),
+          faceDown: revealTop(state.faceDown, p.fromColumn, start),
+        },
+        [{ type: 'card_moved', cardId: p.cardId, from: 'tableau', to: 'tableau' }],
+      );
+    }
+
+    case 'foundation_to_tableau': {
+      const s = suitIndex(p.suit);
+      const pile = state.foundations[s];
+      const card = pile?.[pile.length - 1];
+      const target = state.tableau[p.toColumn];
+      if (card === undefined) return fail('card_not_in_hand', 'Fundação vazia.');
+      if (target === undefined || !canPlaceOnTableau(card, target)) {
+        return fail('invalid_setup', 'Essa carta não cabe na coluna.');
+      }
+      return finish(
+        {
+          ...state,
+          foundations: state.foundations.map((f, i) => (i === s ? f.slice(0, -1) : f)),
+          tableau: state.tableau.map((col, i) => (i === p.toColumn ? [...col, card] : col)),
+        },
+        [{ type: 'card_moved', cardId: card.id, from: 'foundation', to: 'tableau' }],
+      );
+    }
   }
 }
 
 // ---------------------------------------------------------------------------
-// publicView
+// Visões e resultado
 // ---------------------------------------------------------------------------
 
-function publicView(state: PatienceState) {
-  const wasteTop = state.waste[state.waste.length - 1] ?? null;
-  const tableauHeights = state.tableau.map((col) => col.length);
-  const foundationHeights = state.foundations.map((pile) => pile.length);
-  const freeCellsCount = state.freeCells.filter((c) => c !== null).length;
-
+function publicView(state: PatienceState): PatiencePublicView {
   return {
     gameId: 'patience',
     status: state.status,
-    currentTurnPlayerId: state.currentTurnPlayerId,
     stockCount: state.stock.length,
-    wasteTop:
-      wasteTop !== null
-        ? { id: wasteTop.id, suit: wasteTop.suit, value: wasteTop.value }
-        : null,
-    tableauHeights,
-    foundationHeights,
-    freeCellsCount,
+    wasteTop: state.waste[state.waste.length - 1] ?? null,
+    tableauHeights: state.tableau.map((col) => col.length),
+    foundationHeights: state.foundations.map((pile) => pile.length),
   };
 }
-
-// ---------------------------------------------------------------------------
-// viewFor
-// ---------------------------------------------------------------------------
 
 function viewFor(state: PatienceState, playerId: string) {
-  return {
-    playerId,
-    legalActions: legalActions(state, playerId),
-  };
+  return { playerId, legalActions: legalActions(state, playerId) };
 }
 
-// ---------------------------------------------------------------------------
-// resultOf
-// ---------------------------------------------------------------------------
-
-function resultOf(state: PatienceState) {
-  const totalInFoundations = state.foundations.reduce(
-    (sum, pile) => sum + pile.length,
-    0,
-  );
-  if (totalInFoundations === 52) {
-    return { outcome: 'win' as const };
-  }
-  // Draw condition: stock empty and no valid moves
-  const hasValidMoves =
-    state.stock.length > 0 ||
-    legalActions(state, state.currentTurnPlayerId).length > 0;
-  if (!hasValidMoves && state.stock.length === 0) {
-    return { outcome: 'draw' as const };
-  }
-  return { outcome: 'continue' as const };
+function resultOf(state: PatienceState): { outcome: 'win' } | null {
+  return state.status === 'finished' ? { outcome: 'win' } : null;
 }
 
-// ---------------------------------------------------------------------------
-// PatienceEvent type
-// ---------------------------------------------------------------------------
-
-export type PatienceEvent =
-  | { type: 'card_moved'; cardId: string; from: string; to: string }
-  | { type: 'turn_changed'; playerId: string }
-  | { type: 'game_finished'; outcome: 'win' | 'draw' | 'continue' };
-
-// ---------------------------------------------------------------------------
-// Game definition export
-// ---------------------------------------------------------------------------
-
-export const patienceGame: GameDefinition<PatienceState, PatienceActionPayload, {
-  gameId: string;
-  status: 'playing' | 'finished';
-  currentTurnPlayerId: string;
-  stockCount: number;
-  wasteTop:
-    | { readonly id: string; readonly suit: PatienceSuit; readonly value: PatienceValue }
-    | null;
-  tableauHeights: readonly number[];
-  foundationHeights: readonly number[];
-  freeCellsCount: number;
-}, {
-  playerId: string;
-  legalActions: readonly PatienceActionPayload[];
-}, { outcome: 'win' | 'draw' | 'continue' }, PatienceEvent> = {
+export const patienceGame: GameDefinition<
+  PatienceState,
+  PatienceActionPayload,
+  PatiencePublicView,
+  { playerId: string; legalActions: readonly PatienceActionPayload[] },
+  { outcome: 'win' },
+  PatienceEvent
+> = {
   id: 'patience',
   playerCount: { min: 1, max: 1 },
   createInitialState,

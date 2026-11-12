@@ -30,5 +30,12 @@ export {
   type PatienceActionPayload,
   type PatienceState,
   type PatienceEvent,
+  type PatiencePublicView,
   createDeck,
+  cardColor,
+  cardRank,
+  canPlaceOnFoundation,
+  canPlaceOnTableau,
+  PATIENCE_SUITS,
+  PATIENCE_VALUES,
 } from './patience';
