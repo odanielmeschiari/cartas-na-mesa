@@ -22,7 +22,12 @@
  */
 
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import type { ColyseusSDK, Room as SdkRoom } from '@colyseus/sdk';
+import {
+  ErrorCode as ColyseusErrorCode,
+  MatchMakeError,
+  type ColyseusSDK,
+  type Room as SdkRoom,
+} from '@colyseus/sdk';
 import type { ColyseusTestServer } from '@colyseus/testing';
 import { matchMaker } from 'colyseus';
 import {
@@ -55,6 +60,7 @@ import {
   TEST_TIMEOUT_ROOM_NAME,
   validateMessages,
   waitFor,
+  type Match,
   TestConnection,
 } from './fixture.integration.helper';
 
@@ -198,6 +204,82 @@ async function openReconnectConnection(roomCode: string): Promise<SdkRoom> {
   }
 
   return room;
+}
+
+/**
+ * Código de sala que não existe: 6 caracteres do mesmo alfabeto do servidor
+ * (A–Z sem `I`, `L` e `O`, mais 2–9). Nenhuma sala do teste usa esse código.
+ */
+const UNKNOWN_ROOM_CODE = 'ZZZZZZ';
+
+/**
+ * Token de sessão desconhecido: 43 caracteres base64url, o mesmo formato dos
+ * tokens que o servidor emite (32 bytes em base64url).
+ */
+const UNKNOWN_SESSION_TOKEN = 'dG9rZW4tZGUtc2Vzc2FvLWRlc2NvbmhlY2lkLTAwMDA';
+
+/**
+ * Tira o segundo jogador da sala, liberando a vaga de conexão do Colyseus.
+ *
+ * O assento de jogo é preservado (a presença vira `connected: false`), então a
+ * partida continua com os dois jogadores — só a conexão some. É o que permite
+ * abrir uma conexão nova na sala sem mexer no `maxClients = 2`.
+ */
+async function leaveGuest(match: Match): Promise<void> {
+  const leave = waitForLeave(match.guest.room);
+  await match.guest.room.leave();
+  await leave;
+
+  // O jogador que ficou espera ver a ausência do outro.
+  await match.host.waitFor(
+    () =>
+      publicStates(match.host).some(
+        (state) =>
+          state.seats.length === 2 &&
+          state.seats.some(
+            (seat) => seat.playerId === match.guestAccepted.playerId && seat.connected === false,
+          ),
+      ),
+    'o jogador restante observar a ausência do outro no "state_public"',
+  );
+}
+
+/**
+ * Abre uma conexão nova na sala, **sem identidade**, repetindo o pedido de
+ * matchmaking até que a vaga de conexão do Colyseus seja liberada.
+ *
+ * A conexão não senta: quem toma um assento de jogo — ou reassume a sessão de
+ * jogo — é a mensagem enviada depois.
+ */
+async function openExtraConnection(roomCode: string): Promise<TestConnection> {
+  let connection: TestConnection | undefined;
+  let lastError: unknown;
+
+  try {
+    await waitFor(async () => {
+      try {
+        const room = await joinWithoutIdentity(sdk, roomCode);
+        connection = new TestConnection(room);
+        return true;
+      } catch (error) {
+        // A vaga de conexão ainda não foi liberada: a espera é reavaliada.
+        lastError = error;
+        return false;
+      }
+    }, `a nova conexão ser aceita na sala "${roomCode}"`);
+  } catch (error) {
+    throw new Error(
+      `Não foi possível abrir uma nova conexão na sala "${roomCode}": ` +
+        `${lastError instanceof Error ? lastError.message : String(error)}`,
+      { cause: error },
+    );
+  }
+
+  if (connection === undefined) {
+    throw new Error(`Não foi possível abrir uma nova conexão na sala "${roomCode}".`);
+  }
+
+  return connection;
 }
 
 describe('S1 — duas conexões na mesma sala', () => {
@@ -992,6 +1074,298 @@ describe('Prazo de identidade — a conexão sem identidade não segura a sala',
       );
 
       expect(await matchMaker.getRoomById(roomCode)).toBeUndefined();
+    },
+    TEST_TIMEOUT_MS,
+  );
+});
+
+/**
+ * Códigos de erro do contrato (docs/architecture/0001-fixture-contract.md §5 e
+ * docs/architecture/0002-spike-mecanismo-tempo-real.md §5).
+ *
+ * Cada caso afirma três coisas: o `code` do erro, que o erro foi entregue
+ * **só ao remetente** e que o estado da partida não mudou. A barreira de
+ * sincronização — uma jogada válida depois da rejeição — prova que a sala
+ * continua viva e coerente.
+ *
+ * Limite do fixture: `maxClients = 2` no Colyseus, e a partida tem 2 assentos
+ * de jogo. Com os dois jogadores conectados, uma 3ª conexão é barrada no
+ * matchmaking; por isso os casos que precisam de uma conexão extra liberam
+ * antes a vaga do jogador que sai (o assento de jogo é preservado).
+ */
+describe('Códigos de erro do contrato', () => {
+  it(
+    'recusa join_room com roomCode errado com room_not_found, só para o remetente',
+    async () => {
+      const match = await setupMatch(sdk);
+
+      // O caminho do `room_not_found` por mensagem exige um WebSocket já
+      // aberto numa sala existente: com um código inexistente, a falha
+      // acontece antes, no matchmaking, e chega como erro HTTP — nunca como
+      // mensagem `error` do protocolo.
+      const matchmakingFailure = await sdk.joinById(UNKNOWN_ROOM_CODE).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+      expect(matchmakingFailure).toBeInstanceOf(MatchMakeError);
+      expect((matchmakingFailure as MatchMakeError).code).toBe(
+        ColyseusErrorCode.MATCHMAKE_INVALID_ROOM_ID,
+      );
+      // Nenhum cliente recebeu mensagem de erro: a falha nem virou protocolo.
+      expect(match.host.messages.error).toEqual([]);
+      expect(match.guest.messages.error).toEqual([]);
+
+      // Com os dois jogadores conectados, a 3ª conexão é barrada no
+      // matchmaking (maxClients = 2). A vaga do jogador que sai é liberada
+      // para a conexão de teste; o assento de jogo dele é preservado.
+      await leaveGuest(match);
+
+      const intruder = await openExtraConnection(match.roomCode);
+      const stateBefore = lastStatePublic(match.host);
+
+      intruder.room.send('join_room', {
+        type: 'join_room',
+        roomCode: UNKNOWN_ROOM_CODE,
+        nickname: 'Cau',
+        avatarId: null,
+      });
+
+      const error = await awaitError(intruder, 'o erro "room_not_found" para o código errado');
+      expect(error.code).toBe('room_not_found');
+      expect(error.message.length).toBeGreaterThan(0);
+
+      // A conexão recusada não entrou na sala.
+      expect(intruder.messages.join_accepted).toEqual([]);
+      expect(intruder.messages.state_public).toEqual([]);
+
+      // O erro foi só para quem o provocou.
+      expect(match.host.messages.error).toEqual([]);
+      expect(match.guest.messages.error).toEqual([]);
+
+      // O estado não mudou.
+      expect(lastStatePublic(match.host).version).toBe(stateBefore.version);
+      expect(lastStatePublic(match.host).game.table).toEqual(stateBefore.game.table);
+      expect(lastStatePublic(match.guest).version).toBe(0);
+      expect(lastStatePublic(match.guest).game.table).toEqual([]);
+
+      // Barreira de sincronização: a partida continua jogável.
+      const cardId = at(lastStatePrivate(match.host).view.hand, 0, 'a mão de Ana');
+      playCard(match.host, match.matchId, stateBefore.version, cardId);
+      await awaitStateVersion(match.host, stateBefore.version + 1);
+
+      expect(lastStatePublic(match.host).version).toBe(stateBefore.version + 1);
+      expect(lastStatePublic(match.host).game.table).toHaveLength(1);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'recusa reconnect com token desconhecido com session_invalid, só para o remetente',
+    async () => {
+      const match = await setupMatch(sdk);
+
+      // A vaga de conexão do jogador que sai é liberada; o assento de jogo é
+      // preservado (a reconexão continua possível).
+      await leaveGuest(match);
+
+      const stranger = await openExtraConnection(match.roomCode);
+      const stateBefore = lastStatePublic(match.host);
+
+      stranger.room.send('reconnect', {
+        type: 'reconnect',
+        roomCode: match.roomCode,
+        sessionToken: UNKNOWN_SESSION_TOKEN,
+      });
+
+      const error = await awaitError(
+        stranger,
+        'o erro "session_invalid" para o token desconhecido',
+      );
+      expect(error.code).toBe('session_invalid');
+      expect(error.message.length).toBeGreaterThan(0);
+
+      // A conexão recusada não assumiu nenhuma sessão: nem `join_accepted`,
+      // nem visão privada de ninguém.
+      expect(stranger.messages.join_accepted).toEqual([]);
+      expect(stranger.messages.state_public).toEqual([]);
+      expect(stranger.messages.state_private).toEqual([]);
+
+      // O erro foi só para quem o provocou.
+      expect(match.host.messages.error).toEqual([]);
+      expect(match.guest.messages.error).toEqual([]);
+
+      // O estado não mudou.
+      expect(lastStatePublic(match.host).version).toBe(stateBefore.version);
+      expect(lastStatePublic(match.host).game.table).toEqual(stateBefore.game.table);
+      expect(lastStatePublic(match.guest).version).toBe(0);
+      expect(lastStatePublic(match.guest).game.table).toEqual([]);
+
+      // Barreira de sincronização: a partida continua jogável.
+      const cardId = at(lastStatePrivate(match.host).view.hand, 0, 'a mão de Ana');
+      playCard(match.host, match.matchId, stateBefore.version, cardId);
+      await awaitStateVersion(match.host, stateBefore.version + 1);
+
+      expect(lastStatePublic(match.host).version).toBe(stateBefore.version + 1);
+      expect(lastStatePublic(match.host).game.table).toHaveLength(1);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'recusa ação depois do fim da partida com game_finished, só para o remetente',
+    async () => {
+      const match = await setupMatch(sdk);
+      const { host, guest, hostAccepted, matchId } = match;
+
+      // As 4 cartas do fixture: cada jogador joga duas, sempre na vez. O turno
+      // vem do estado público, nunca de suposição do teste.
+      let version = 0;
+      while (lastStatePublic(host).game.status === 'playing') {
+        const turnPlayerId = lastStatePublic(host).game.currentTurnPlayerId;
+        const player = turnPlayerId === hostAccepted.playerId ? host : guest;
+        const cardId = at(lastStatePrivate(player).view.hand, 0, 'a mão do jogador da vez');
+
+        playCard(player, matchId, version, cardId);
+        version += 1;
+        await awaitStateVersion(host, version);
+        await awaitStateVersion(guest, version);
+      }
+
+      const finished = lastStatePublic(host);
+      expect(finished.game.status).toBe('finished');
+      expect(finished.game.result).toEqual({ outcome: 'draw' });
+      expect(finished.game.currentTurnPlayerId).toBeNull();
+      expect(finished.version).toBe(4);
+      expect(finished.game.table).toHaveLength(4);
+
+      // Uma ação depois do fim: o servidor recusa com game_finished.
+      const playedCard = at(finished.game.table, 0, 'a mesa final').cardId;
+      playCard(host, matchId, finished.version, playedCard);
+
+      const error = await awaitError(host, 'o erro "game_finished" para a ação após o fim');
+      expect(error.code).toBe('game_finished');
+      expect(error.message.length).toBeGreaterThan(0);
+
+      // O erro foi só para quem o provocou.
+      expect(host.messages.error).toHaveLength(1);
+      expect(guest.messages.error).toEqual([]);
+
+      // O estado não mudou.
+      expect(lastStatePublic(host).version).toBe(finished.version);
+      expect(lastStatePublic(guest).version).toBe(finished.version);
+      expect(lastStatePublic(host).game.table).toEqual(finished.game.table);
+      expect(lastStatePublic(guest).game.table).toEqual(finished.game.table);
+      expect(lastStatePublic(host).game.status).toBe('finished');
+
+      // Barreira: com a partida encerrada não existe jogada válida que
+      // aumente a versão. A barreira passa a ser a sala viva e coerente — a
+      // outra conexão também é atendida e o estado continua o mesmo.
+      playCard(guest, matchId, finished.version, playedCard);
+      const guestError = await awaitError(guest, 'o erro "game_finished" na segunda conexão');
+      expect(guestError.code).toBe('game_finished');
+
+      expect(lastStatePublic(host).version).toBe(finished.version);
+      expect(lastStatePublic(guest).version).toBe(finished.version);
+      expect(lastStatePublic(host).game.table).toHaveLength(4);
+      expect(lastStatePublic(guest).game.table).toEqual(lastStatePublic(host).game.table);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'recusa tipo de mensagem desconhecido com invalid_payload e mantém a conexão viva',
+    async () => {
+      const match = await setupMatch(sdk);
+      const { host, guest } = match;
+
+      const stateBefore = lastStatePublic(host);
+
+      host.room.send('mensagem_desconhecida', { qualquer: 'coisa' });
+
+      const error = await awaitError(host, 'o erro "invalid_payload" para o tipo desconhecido');
+      expect(error.code).toBe('invalid_payload');
+      expect(error.message.length).toBeGreaterThan(0);
+      // A mensagem de erro não ecoa o payload do cliente.
+      expect(error.message).not.toContain('coisa');
+
+      // O erro foi só para quem o provocou.
+      expect(guest.messages.error).toEqual([]);
+
+      // O estado não mudou.
+      expect(lastStatePublic(host).version).toBe(stateBefore.version);
+      expect(lastStatePublic(host).game.table).toEqual(stateBefore.game.table);
+      expect(lastStatePublic(guest).version).toBe(stateBefore.version);
+      expect(lastStatePublic(guest).game.table).toEqual(stateBefore.game.table);
+
+      // Barreira de sincronização: a conexão continua viva e a jogada é aceita.
+      const cardId = at(lastStatePrivate(host).view.hand, 0, 'a mão de Ana');
+      playCard(host, match.matchId, stateBefore.version, cardId);
+      await awaitStateVersion(host, stateBefore.version + 1);
+      await awaitStateVersion(guest, stateBefore.version + 1);
+
+      expect(lastStatePublic(host).version).toBe(stateBefore.version + 1);
+      expect(lastStatePublic(host).game.table).toHaveLength(1);
+      expect(lastStatePublic(guest).game.table).toEqual(lastStatePublic(host).game.table);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'recusa o terceiro jogador com room_full quando não há assento de jogo livre',
+    async () => {
+      const match = await setupMatch(sdk);
+      const { host, guest } = match;
+
+      // Com os dois jogadores conectados, a 3ª conexão é barrada no
+      // matchmaking: o limite de conexões do Colyseus (`maxClients = 2`) é
+      // igual ao número de assentos de jogo, e a falha chega como erro HTTP —
+      // nenhuma mensagem `error` é enviada a ninguém.
+      await expect(sdk.joinById(match.roomCode)).rejects.toThrow(/is locked|is already full/);
+
+      expect(host.messages.error).toEqual([]);
+      expect(guest.messages.error).toEqual([]);
+
+      // Um jogador ausente libera a vaga de conexão, mas o assento de jogo é
+      // preservado (a presença vira `connected: false`). A nova conexão entra
+      // na sala e é recusada na mensagem: não há assento de jogo livre.
+      await leaveGuest(match);
+
+      const third = await openExtraConnection(match.roomCode);
+      const stateBefore = lastStatePublic(host);
+
+      third.room.send('join_room', {
+        type: 'join_room',
+        roomCode: match.roomCode,
+        nickname: 'Cau',
+        avatarId: null,
+      });
+
+      const error = await awaitError(third, 'o erro "room_full" para o terceiro jogador');
+      expect(error.code).toBe('room_full');
+      expect(error.message.length).toBeGreaterThan(0);
+
+      // A conexão recusada não sentou.
+      expect(third.messages.join_accepted).toEqual([]);
+      expect(third.messages.state_public).toEqual([]);
+
+      // O erro foi só para quem o provocou.
+      expect(host.messages.error).toEqual([]);
+      expect(guest.messages.error).toEqual([]);
+
+      // O estado não mudou.
+      expect(lastStatePublic(host).version).toBe(stateBefore.version);
+      expect(lastStatePublic(host).game.table).toEqual(stateBefore.game.table);
+      expect(lastStatePublic(guest).version).toBe(0);
+      expect(lastStatePublic(guest).game.table).toEqual([]);
+
+      // Barreira de sincronização: a partida continua jogável.
+      const cardId = at(lastStatePrivate(host).view.hand, 0, 'a mão de Ana');
+      playCard(host, match.matchId, stateBefore.version, cardId);
+      await awaitStateVersion(host, stateBefore.version + 1);
+
+      expect(lastStatePublic(host).version).toBe(stateBefore.version + 1);
+      expect(lastStatePublic(host).game.table).toHaveLength(1);
     },
     TEST_TIMEOUT_MS,
   );
