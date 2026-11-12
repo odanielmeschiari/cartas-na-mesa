@@ -297,13 +297,24 @@ usado como valor de `safeParse`, não como argumento de `onMessage`.
 | --- | --- | --- | --- |
 | a | **`RoomCode` curto é adivinhável.** O código de 6 caracteres tem espaço de busca pequeno, e o `joinById` não tem limite nativo de tentativas | `RoomCode` opaco (contrato §2); `joinById` em `MatchMaker.cjs:229-238` | Alfabeto sem caracteres ambíguos (`0/O`, `1/I/L`) + CSPRNG + **limite de tentativas** por código/IP — limite é **decisão de produto adiada** (§8) |
 | b | **Colisão de `RoomCode` conecta o cliente à sala alheia.** Em `recordRoom`, quando `driver.insert` retorna `false` (código já existente), a sala nova é descartada e `handleCreateRoom` devolve o `_listing` da sala **existente** — o cliente que "criou" a sala seria ligado silenciosamente à sala de outro jogador | `MatchMaker.cjs:424-440`; `LocalDriver.cjs:88-95` | Em `onCreate`, verificar se o código já existe (por exemplo via `matchMaker.getRoomById(code)`, `MatchMaker.cjs:451-453`) e, se existir, regerar com CSPRNG — com número limitado de tentativas e falha explícita se esgotar |
-| c | **`maxClients` do Colyseus ≠ assentos de jogo.** `hasReachedMaxClients` conta `clients.length + reservedSeats`; o número de assentos de jogo é 2 (`0`/`1`). São limites **distintos** que protegem coisas diferentes | `Room.cjs:486-488`; `Room.cjs:1425-1428`; `MatchMaker.cjs:556-558` | Documentar os dois limites explicitamente: `maxClients` protege o número de **conexões Colyseus** (inclusive reservas pendentes e reconexões); o assento de jogo protege a **regra** (nenhum terceiro jogador senta). Com 2 jogadores conectados, um terceiro `joinById` é barrado no matchmaking; com 1 jogador ausente, a reconexão é aceita e o terceiro jogador recebe `room_full` na mensagem |
-| d | **`autoDispose` e limpeza da sala.** Sala vazia que permanece viva ocupa memória; sala que morre cedo encerra a partida | `resetAutoDisposeTimeout` em `Room.cjs:1326-1335`; `#_disposeIfEmpty` em `Room.cjs:1473-1480` | `autoDispose = false` durante a partida; o descarte é **explícito** e cobre dois casos: (a) sala **vazia sem partida iniciada** — não há estado de jogo nem assento de reconexão a preservar — e (b) **partida encerrada** com todos desconectados. A partida **em andamento** com todos desconectados **permanece viva**, na espera da decisão de produto sobre a janela de reconexão (§8, item 1). A limpeza do driver acontece em `#_dispose` (`Room.cjs:1481-1485`), removendo o listing pelo `roomId` |
+| c | **`maxClients` do Colyseus ≠ assentos de jogo.** `hasReachedMaxClients` conta `clients.length + reservedSeats`; o número de assentos de jogo é 2 (`0`/`1`). São limites **distintos** que protegem coisas diferentes | `Room.cjs:486-488`; `Room.cjs:1425-1428`; `MatchMaker.cjs:556-558` | Documentar os dois limites explicitamente: `maxClients` protege o número de **conexões Colyseus** (inclusive reservas pendentes e reconexões); o assento de jogo protege a **regra** (nenhum terceiro jogador senta). Com 2 jogadores conectados, um terceiro `joinById` é barrado no matchmaking; com 1 jogador ausente, a reconexão é aceita e o terceiro jogador recebe `room_full` na mensagem. **Mitigado:** uma conexão que não se identifica dentro de `IDENTITY_TIMEOUT_MS` (30 s em produção) é encerrada pelo servidor (`client.leave(4000, 'identity_timeout')`), de modo que ela não segura uma vaga de conexão indefinidamente nem barra o jogador legítimo no matchmaking. A conexão que já se identificou não é afetada pelo prazo. Coberto por teste de regressão em `apps/server/src/rooms/fixture.integration.test.ts` |
+| d | **`autoDispose` e limpeza da sala.** Sala vazia que permanece viva ocupa memória; sala que morre cedo encerra a partida | `resetAutoDisposeTimeout` em `Room.cjs:1326-1335`; `#_disposeIfEmpty` em `Room.cjs:1473-1480` | `autoDispose = false` durante a partida; o descarte é **explícito** e roda em **todo** `onLeave` (`disposeIfFinished()`), cobrindo dois casos: (a) sala **vazia** — sem partida iniciada e sem sessão de jogo, **com ou sem identidade informada** —, que não tem estado de jogo nem assento de reconexão a preservar — e (b) **partida encerrada** com todos desconectados. A partida **em andamento** com todos desconectados **permanece viva**, na espera da decisão de produto sobre a janela de reconexão (§8, item 1). A limpeza do driver acontece em `#_dispose` (`Room.cjs:1481-1485`), removendo o listing pelo `roomId` |
 | e | **Seed influenciada pelo cliente.** `options` do matchmaking é inteiramente do cliente em produção | `MatchMaker.cjs:376`; `Room.cjs:1220-1221` | Seed gerada por CSPRNG dentro da sala, por método `protected` não alcançável pelo cliente (§4) |
 | f | **`Math.random` em caminho de produção.** A primeira versão da sala gerava o código de sala com `Math.random` | `apps/server/src/rooms/fixture.ts`; `apps/server/src/rooms/random.ts` | **Mitigado.** `apps/server/src/rooms/random.ts` é a **porta de entrada única** da aleatoriedade do servidor: `cryptoRandomBytes` (CSPRNG da plataforma), `randomRoomCode`, `randomSessionToken` e `randomUint32`. O sorteio do código de sala é **por rejeição** (bytes fora da janela de aceitação são descartados), o que evita o viés de módulo; a fonte de bytes é injetável, mas só o **teste** a substitui, e a sala de teste sobrescreve **apenas** `createMatchSeed`. `Math.random` não aparece em nenhum caminho de produção (regra 11 do `AGENTS.md`) |
 | g | **Colyseus derruba a conexão em payload inválido** quando se usa a sobrecarga com schema | `RoomMessages.cjs:151-158`; `utils/StandardSchema.cjs:27-36` | Validação manual com `safeParse` dentro do handler + `error { invalid_payload }` (§6.1) |
 | h | **Mensagem sem handler derruba a conexão em produção** | `RoomMessages.cjs:278-291` | Handler curinga `'*'` sempre registrado (§6.2) |
 | i | **Erro do matchmaking não é mensagem `error`.** A falha de `joinById` acontece antes do WebSocket e chega como `MatchMakeError` | `sdk/src/Client.ts:444-451`; `MatchMaker.cjs:229-238`; `MatchMaker.cjs:556-558` | A borda do cliente traduz o erro de matchmaking para o mesmo conjunto de `code` do protocolo (§5.1) |
+
+Os riscos **A3, A4, A5, A6 e A8** abaixo foram acrescentados pela **auditoria de segurança do spike**
+(2026-11-12). Todos estão **pendentes**: nenhum deles foi mitigado no código atual.
+
+| # | Risco | Evidência | Mitigação |
+| --- | --- | --- | --- |
+| A3 | **Seed da partida com 32 bits alimentando um PRNG não criptográfico.** `randomUint32()` devolve 4 bytes (32 bits) e a seed alimenta `createSeededRng` (mulberry32), que **não** é criptográfico. No fixture (4 cartas) é irrelevante, mas o **padrão** será copiado para os jogos reais, onde a mão oculta é o ativo protegido | `apps/server/src/rooms/random.ts` (`randomUint32`); `packages/core/src/rng.ts` (`createSeededRng`); `apps/server/src/rooms/fixture.ts` (`createMatchSeed`) | **Pendente.** Migrar para seed com **≥ 128 bits** e embaralhamento criptográfico **antes do primeiro jogo real** |
+| A4 | **Sala de teste com seed fixa dentro do diretório de produção.** `SeededFixtureRoom` e `fixture.test-helper.ts` moram em `apps/server/src/`. Hoje é **inalcançável** em produção (o nome registrado é `fixture-test`, e `index.ts` registra apenas `fixture`), mas é uma armadilha latente | `apps/server/src/rooms/fixture.test-helper.ts`; `apps/server/src/index.ts`; `apps/server/src/server.ts` | **Pendente.** Mover para fora de `src/` ou adicionar guarda de runtime |
+| A5 | **Dependência Git (`uWebSockets.js`) na árvore sem ser usada.** O servidor usa `WebSocketTransport` (`@colyseus/ws-transport`); `uWebSockets.js` (dependência **git**, do GitHub, com binários nativos pré-compilados) entra na árvore pelo pacote-umbrela `colyseus`, que também traz `@colyseus/monitor`, `@colyseus/playground`, `@colyseus/redis-*`, `@colyseus/auth` e `@colyseus/greeting-banner`. `blockExoticSubdeps: false` remove a barreira do pnpm contra dependências git em subdependências | `pnpm-lock.yaml` (entrada git de `uWebSockets.js`); `pnpm-workspace.yaml` (`blockExoticSubdeps: false`); `apps/server/src/server.ts` (importa do pacote-umbrela `colyseus`) | **Pendente.** Migrar as importações para `@colyseus/core` + `@colyseus/ws-transport` e reavaliar a opção |
+| A6 | **`roomCode` no metadata público do driver.** `this.metadata = { roomCode }` coloca o **código de acesso** da sala no metadata **público** do driver, que é o campo que a futura listagem de salas públicas consumirá. Hoje não há listagem, então não há impacto | `apps/server/src/rooms/fixture.ts` (`onCreate`); §8, item 10 | **Pendente.** Decidir **antes** de implementar a listagem de salas públicas se o `roomCode` é ou não a credencial de acesso |
+| A8 | **Mensagem de erro do motor passa crua ao cliente.** `result.error.message` é enviada sem tradução. Hoje são literais fixos sem dado sensível, mas um motor futuro que incluísse o valor de uma carta passaria a vazar pelo canal `error` | `apps/server/src/rooms/fixture.ts` (`handleActionIntent`); `packages/core/src/fixture.ts` (mensagens do motor) | **Pendente.** Convenção/lint: mensagem de erro do motor não pode conter identificador de carta ou de estado |
 
 ## 8. Decisões adiadas
 
@@ -312,7 +323,7 @@ autor do projeto.
 
 | # | Decisão | Natureza | Comportamento do spike |
 | --- | --- | --- | --- |
-| 1 | Janela de reconexão, tempo limite de jogador ausente e ação automática | **Decisão de produto pendente** | O spike não impõe prazo: o `sessionToken` vale enquanto a sala viver, e o assento de jogo é preservado na queda |
+| 1 | Janela de reconexão, tempo limite de jogador ausente e ação automática | **Decisão de produto pendente** | O spike não impõe prazo: o `sessionToken` vale enquanto a sala viver, e o assento de jogo é preservado na queda. **Uma partida em andamento com todos os jogadores desconectados mantém a sala viva**: nada expira, e a partida continua aberta a quem voltar. O `disposeIfFinished()` só descarta a sala quando a partida **terminou** (§7, risco d) |
 | 2 | Limite de tentativas por código de sala | **Decisão de produto pendente** | O spike não limita tentativas |
 | 3 | Formato e comprimento finais do `RoomCode` (alfabeto) | **Decisão de produto pendente** | O spike usa 6 caracteres de alfabeto sem ambiguidade, gerados por CSPRNG |
 | 4 | Listagem de salas públicas via `metadata` | **Decisão de produto pendente** | O spike não lista salas. Observação técnica: o setter `metadata` só aceita escrita enquanto `_internalState === CREATING`, ou seja, dentro de `onCreate` (`Room.cjs:203-208`) |
@@ -321,6 +332,8 @@ autor do projeto.
 | 7 | Manter o `RoomCode` como `roomId` do Colyseus quando houver salas públicas | **Decisão de produto pendente** | O spike assume `roomCode === roomId`. Ponto de atenção: o `roomId` aparece na URL do matchmaking e no chave do cache do driver; separar os dois exige mapear código→sala e reavaliar a colisão de código (risco b) |
 | 8 | Onde e por quanto tempo o `sessionToken` é guardado no cliente | **Decisão de produto pendente** | O spike não define armazenamento; o token é entregue apenas na `join_accepted` |
 | 9 | Onde persistir/expira o `sessionToken` no servidor | **Decisão de produto pendente** | O spike guarda em memória, na sala; sem persistência (ADR-001) |
+| 10 | Se o `roomCode` é ou não a **credencial de acesso** da sala, e o que pode ir no metadata público | **Decisão de produto pendente** (achado **A6** da auditoria de segurança) | Hoje `this.metadata = { roomCode }` publica o código de acesso no metadata do driver — o campo que a futura listagem de salas públicas consumirá. Como a listagem **não existe**, não há impacto agora. **Decidir antes de implementar a listagem de salas públicas** (item 8 do `next_tasks.md`) |
+| 11 | Limite de tamanho do `avatarId` no protocolo | **Decisão técnica pendente** (achado de severidade **baixa** da auditoria de segurança) | Hoje `avatarId` é validado como `z.string().nullable()`, **sem limite de tamanho** (`packages/protocol/src/scalars.ts`): um `avatarId` arbitrariamente longo é aceito e volta no `seatInfo` público. Resolver em **passo próprio**, com ADR (mudança de contrato) |
 
 ## 9. Verificado no código do Colyseus 0.18
 
@@ -362,6 +375,17 @@ Todos os fatos abaixo foram conferidos no código instalado
 Enquanto a §9 registra fatos sobre o **Colyseus**, esta subseção registra o estado do **código do
 projeto**, conferido em `apps/server/src/rooms/` e nos testes de integração.
 
+**Auditoria de segurança — executada em 2026-11-12.** Resultado: **nenhum achado crítico**. Os dois
+achados **alto** — *vazamento de sala vazia sem identidade* e *conexão sem identidade segurando uma
+vaga de conexão* — foram **corrigidos**, cada um com **teste de regressão**. Restaram achados de
+severidade menor, todos **pendentes**: **4 de severidade média** (A3, A4, A5, A6 — detalhados na §7)
+e **2 de severidade baixa** (A8 — §7 — e o limite de tamanho do `avatarId` — §8, item 11).
+
+A auditoria **confirmou como corretos**: a integridade do servidor autoritativo (regra 9), a
+não-vazamento de informação oculta (regra 10), a aleatoriedade controlada (regra 11), o domínio puro
+(regra 12), a validação de toda entrada externa com Zod (regra 15), a ausência de segredo ou dado
+pessoal (regra 5) e a ausência de script de build perigoso.
+
 **Implementado e coberto por teste automatizado:**
 
 - **Fluxo de criar, entrar e reconectar**: `create_room`, `join_room` e `reconnect` são tratados
@@ -375,7 +399,12 @@ projeto**, conferido em `apps/server/src/rooms/` e nos testes de integração.
   `card_not_in_hand`, `stale_state`, `match_not_found` e `session_invalid`.
 - **Validação manual com `safeParse`** em cada handler: payload inválido é recusado com
   `invalid_payload` **sem derrubar a conexão**.
-- **Descarte da sala**: a sala vazia **sem partida iniciada** é descartada do matchmaking.
+- **Ciclo de vida da sala**: a sala vazia — **com ou sem partida iniciada** e **com ou sem
+  identidade informada** — é descartada do matchmaking; o descarte (`disposeIfFinished()`) roda em
+  **todo** `onLeave`.
+- **Prazo de identidade**: uma conexão que não se identifica dentro de `IDENTITY_TIMEOUT_MS`
+  (30 s em produção) é encerrada pelo servidor (`client.leave(4000, 'identity_timeout')`) e libera a
+  vaga de conexão; a conexão que já se identificou não é afetada.
 
 **Ainda não coberto:**
 
@@ -388,11 +417,14 @@ projeto**, conferido em `apps/server/src/rooms/` e nos testes de integração.
   `game_finished` e `room_not_found` por código errado.
 - **Não existem ainda**: listagem de salas públicas, dono da sala e início manual da partida
   (§8, itens 4 e 5).
+- **Pendentes da auditoria de segurança**: A3, A4, A5, A6 e A8 (§7) e o limite de tamanho do
+  `avatarId` (§8, item 11). Nenhum deles foi corrigido; cada um tem um momento de resolução
+  registrado nos itens citados.
 
 **Onde estão os testes:**
 
 - `apps/server/src/rooms/fixture.integration.test.ts` — os testes de integração (S1–S3, o conflito
-  de vínculo na reconexão e o ciclo de vida da sala).
+  de vínculo na reconexão, o ciclo de vida da sala e o prazo de identidade).
 - `apps/server/src/rooms/fixture.integration.helper.ts` — o harness: sobe um servidor Colyseus
   real, conecta clientes reais do SDK oficial e acumula **todas** as mensagens recebidas por
   conexão (o "payload bruto" exigido pelo ADR-001).
@@ -401,6 +433,10 @@ projeto**, conferido em `apps/server/src/rooms/` e nos testes de integração.
   `TEST_MATCH_SEED = 42`. Ela é registrada no servidor de teste com o nome **`fixture-test`**,
   distinto do nome de produção (`fixture`), de modo que nenhum cliente real alcança a sala de
   seed fixa (§4.1).
+- O mesmo arquivo traz `ShortTimeoutFixtureRoom`, que sobrescreve também `identityTimeoutMs()`
+  (`TEST_IDENTITY_TIMEOUT_MS = 400`) para encurtar o prazo de identidade no teste. **Atenção (achado
+  A4, §7):** esse arquivo de teste vive dentro de `apps/server/src/`, o diretório de produção; hoje
+  é inalcançável em produção, mas é uma armadilha latente.
 
 ## 10. Emenda ao ADR-001 (texto pronto para o `documenter`)
 
