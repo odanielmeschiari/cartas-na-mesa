@@ -55,22 +55,59 @@
   border-radius: 1rem;
   padding: 1rem;
   color: #ecfdf5;
-  background:
-    radial-gradient(ellipse at 50% 30%, #15803d 0%, #166534 45%, #14532d 100%);
+  background: radial-gradient(ellipse at 50% 30%, #15803d 0%, #166534 45%, #14532d 100%);
   box-shadow:
     inset 0 0 0 6px #422006,
     inset 0 0 0 8px #a16207,
     0 18px 40px -12px rgb(0 0 0 / 0.55);
 }
 
-.cnm-board {
-  container-type: inline-size;
-  padding: 0.5rem;
+.cnm-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  border-radius: 0;
+  padding: max(0.75rem, env(safe-area-inset-top)) 0.75rem max(0.5rem, env(safe-area-inset-bottom));
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* O contêiner mede a área livre; o tabuleiro escolhe a largura da carta
+   pela largura E pela altura disponíveis, e rola por dentro se faltar altura. */
+.cnm-board-wrap {
+  flex: 1;
+  min-height: 0;
+  container-type: size;
 }
 
 .cnm-board {
-  --gap: clamp(4px, 1.4cqw, 14px);
-  --cw: calc((100cqw - 6 * var(--gap)) / 7);
+  --gap: clamp(4px, 1.2cqw, 16px);
+  --cw: min(calc((100cqw - 6 * var(--gap)) / 7), calc(100cqh / 5.2));
+  width: calc(var(--cw) * 7 + var(--gap) * 6);
+  height: 100%;
+  margin: 0 auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding-bottom: calc(var(--cw) * 1.5);
+}
+
+.cnm-draggable {
+  touch-action: none;
+  cursor: grab;
+}
+
+.cnm-hidden {
+  visibility: hidden;
+}
+
+.cnm-ghost {
+  position: fixed;
+  z-index: 60;
+  pointer-events: none;
+  filter: drop-shadow(0 10px 14px rgb(0 0 0 / 0.5));
+  transform: rotate(2deg);
 }
 
 .cnm-row {
