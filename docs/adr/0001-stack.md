@@ -1,6 +1,6 @@
 # ADR-001 — Stack do MVP
 
-- **Status:** Aceito
+- **Status:** Aceito (emendado em 2026-11-12 — ver Emenda 1)
 - **Data:** 2026-11-11
 - **Decisores:** autor do projeto
 - **Fonte da decisão:** `AGENTS.md`, seção "Stack decidida"
@@ -148,6 +148,28 @@ emenda a este.
 
 Nenhuma versão, benchmark ou API específica é afirmada neste ADR; o que não foi verificado fica
 explicitamente para o spike.
+
+### Emenda 1 (2026-11-12) — Projeção por jogador sem `StateView` de schema
+
+**Escopo:** altera o critério S3 do spike ("Informação oculta por jogador via `StateView`") e a
+mitigação do risco "O `StateView` do Colyseus não filtrar informação oculta como o produto exige".
+
+O spike optou por **mensagens privadas explícitas**, sem usar o `StateView` de schema:
+
+- `state_public` — payload idêntico para todos os clientes da sala (cabeçalho da partida, `seats`
+  e visão pública do motor). Entregue por broadcast.
+- `state_private` — visão privada calculada por `viewFor` **apenas** para o jogador dono, enviada
+  por conexão e nunca reutilizada entre clientes.
+
+Esta escolha é permitida pelo contrato `docs/architecture/0001-fixture-contract.md` §6, que admite
+"filtro por cliente no `StateView`, mensagem privada ou combinação". O isolamento por cliente é
+assegurado por construção: a mensagem privada é enviada ao `client` correspondente e nunca entra em
+broadcast. **O critério de aceite S3 permanece inalterado**: nenhum identificador de carta da mão
+alheia pode aparecer no payload recebido por um jogador, verificado por asserção automatizada sobre
+o payload bruto de cada conexão.
+
+Mecanismo de salas, mensagens, reconexão e verificação no código do Colyseus 0.18:
+`docs/architecture/0002-spike-mecanismo-tempo-real.md`.
 
 ## Decisões em aberto
 

@@ -3,21 +3,31 @@
 > **Handoff para nova sessão.** Antes de qualquer ação: ler `AGENTS.md` integralmente e
 > `docs/adr/0001-stack.md`. A stack está decidida; não reabrir sem pedido do usuário.
 
-**Estado em 2026-11-12:** passos 1–3 concluídos: scaffold do monorepo, protocolo Zod e core
-fixture. Os comandos mais recentes `pnpm typecheck`, `pnpm lint`, `pnpm test` (6 arquivos, 79
-testes) e `pnpm format:check` passaram. O build do scaffold também passou antes do código do
-servidor. O passo 4 está **incompleto**: `apps/server` tem Colyseus 0.18.12, Zod 4.6.7 e
-dependências workspace de core/protocol; `FixtureRoom` e `server.ts` existem, mas faltam testes de
-integração S1–S3. Não declarar S1–S3 aprovados. Não houve commit nem push.
+**Estado em 2026-11-12:** passos 1–3 concluídos (scaffold do monorepo, protocolo Zod e core
+fixture) e **passo 4 (spike do servidor) implementado**. A sala segue o contrato de rede de
+`docs/architecture/0001-fixture-contract.md` e o mecanismo de
+`docs/architecture/0002-spike-mecanismo-tempo-real.md`: o código de sala **é** o `roomId` do
+Colyseus, a identidade do jogador chega por **mensagem** (`create_room`/`join_room`/`reconnect`), a
+seed da partida é gerada **no servidor**, a validação é **manual** com `safeParse` — sem derrubar a
+conexão — e todo `error` é entregue **só ao remetente**. A aleatoriedade de produção passa por
+`apps/server/src/rooms/random.ts`, porta de entrada única baseada em CSPRNG: **não há
+`Math.random` em nenhum caminho de produção**. Os testes de integração **S1–S3 estão automatizados**,
+com servidor Colyseus real e clientes reais do SDK oficial. A revisão independente **foi feita** e
+seus dois achados bloqueantes foram corrigidos (vínculo de sessão na reconexão e descarte da sala
+vazia sem partida). **Pendentes:** auditoria de segurança, teste automatizado do critério **S4** e
+o spike do cliente. `pnpm typecheck`, `pnpm lint`, `pnpm test` (8 arquivos, 112 testes) e
+`pnpm format:check` passam. Houve **commit**; o **push está pendente** (6 commits à frente de
+`origin/main`).
 
-**Instalação:** para resolver a dependência Git `uWebSockets.js`, `pnpm install` neste shell
-precisou de `PNPM_CONFIG_BLOCK_EXOTIC_SUBDEPS=false`. Foi acrescentado
-`block-exotic-subdeps=false` ao `.npmrc`, mas pnpm 12 aparentemente não respeitou a opção isolada.
-`pnpm-workspace.yaml` ganhou `allowBuilds.msgpackr-extract: true` para o build nativo. Na retomada,
-validar a configuração com instalação frozen; não incluir `npm package-lock` (nenhum deve existir).
+**Instalação:** o pnpm 12 lê as opções do projeto de `pnpm-workspace.yaml` — o `.npmrc` só é lido
+para auth, registry, TLS, proxy e endereço local. A dependência Git `uWebSockets.js`, puxada pelo
+Colyseus, exige `blockExoticSubdeps: false`, que agora vive em `pnpm-workspace.yaml`; a mesma
+configuração tem `allowBuilds.msgpackr-extract: true` para o build nativo. O
+`pnpm install --frozen-lockfile` **foi executado com sucesso** e o `pnpm-lock.yaml` está commitado.
+Não deve existir nenhum `package-lock.json` no repositório (npm package-lock); hoje não há nenhum.
 
-Tentativa de testes com subagents foi bloqueada por quota do provider/modelo. Revisão independente e
-auditoria de segurança continuam pendentes.
+A tentativa de testes com subagents foi bloqueada por quota do provider/modelo; a revisão
+independiente foi feita depois, por outra via. A **auditoria de segurança continua pendente**.
 
 ## Como executar
 
@@ -32,9 +42,9 @@ auditoria de segurança continuam pendentes.
 ### 1. Scaffold do monorepo
 
 **Status: concluído.** Scaffold do monorepo criado. `pnpm typecheck`, `pnpm lint`, `pnpm test`
-(6 arquivos, 79 testes) e `pnpm format:check` passaram mais recentemente; o build do scaffold
-passou antes da implementação do servidor. A reprodutibilidade da instalação ainda exige validar
-as configurações descritas no resumo do estado.
+(8 arquivos, 112 testes) e `pnpm format:check` passaram mais recentemente. A instalação
+reproduzível com lockfile foi validada com `pnpm install --frozen-lockfile`, conforme o resumo do
+estado.
 
 ### 2. Contratos do fixture
 
@@ -48,44 +58,70 @@ indicados no resumo do estado.
 
 ### 4. Spike do servidor Colyseus
 
-**Status: INCOMPLETO.** `FixtureRoom` e `server.ts` existem, mas ainda não há testes de integração
-S1–S3; não considerar nenhum desses cenários aprovado. O protótipo não liga os caminhos de criação
-e entrada do contrato: `onJoin` consome `options`, mas `create_room`/`join_room` não foram
-implementados. A geração do código de sala usa `Math.random` e o jogo inicia com seed fixa; corrigir
-ambos antes de considerar pronto, usando aleatoriedade adequada à infraestrutura e seed de teste
-explícita. JSON de ação inválido pode lançar em vez de responder `invalid_payload`. Também faltam
-validação de `matchId`/ação stale e reconexão implementada. Confirmar as APIs Colyseus e a
-reconexão antes de fechar o spike. O mapeamento de `create_room`/`join_room` para o matchmaking do
-Colyseus não está resolvido: seguir o contrato/ADR, sem supor mecanismo; consultar documentação
-oficial no próximo passo. Dependências atuais: Colyseus 0.18.12, Zod 4.6.7 e workspace core/protocol.
+**Status: implementado.** A sala segue o contrato de rede e o mecanismo documentados em
+`docs/architecture/0001-fixture-contract.md` e
+`docs/architecture/0002-spike-mecanismo-tempo-real.md`:
 
-**Próximo passo atômico:** depois do item 1 abaixo, finalizar a implementação correta do servidor;
-somente então executar os testes de integração S1–S3 com clientes reais/`colyseus testing`.
+- o código de sala curto, gerado por CSPRNG, **é** o `roomId` do Colyseus (definido em `onCreate`);
+- a identidade do jogador chega por **mensagem** (`create_room`, `join_room`, `reconnect`), não
+  pelo `options` do matchmaking — que, em produção, é inteiramente controlado pelo cliente;
+- a seed da partida é gerada **no servidor**, por um método `protected createMatchSeed()`; o teste
+  sobrescreve **apenas** esse método (`SeededFixtureRoom`, `TEST_MATCH_SEED = 42`, sala registrada
+  como `fixture-test`, distinta do nome de produção);
+- validação **manual** com `safeParse` do schema Zod em cada handler: payload inválido vira
+  `error { code: 'invalid_payload' }` **sem derrubar a conexão**, e há handler curinga para tipo
+  de mensagem desconhecido;
+- todo `error` é entregue **só ao remetente**; `state_public` é idêntico para todos os jogadores e
+  `state_private` vai só para o dono, por conexão;
+- aleatoriedade somente por `apps/server/src/rooms/random.ts` (CSPRNG, com sorteio por rejeição no
+  código de sala): **sem `Math.random`** em nenhum caminho de produção;
+- descarte explícito da sala: sala vazia **sem partida iniciada** e partida encerrada com todos
+  desconectados; partida **em andamento** com todos desconectados permanece viva, na espera da
+  decisão de produto sobre a janela de reconexão;
+- testes de integração **S1–S3 automatizados**, com servidor Colyseus real e clientes reais do SDK
+  oficial (`apps/server/src/rooms/fixture.integration.test.ts`).
+
+**Dois defeitos encontrados na revisão e corrigidos**, cada um com teste de regressão:
+
+1. **Vínculo de sessão na reconexão:** um `reconnect` que apresentasse o token de outra sessão
+   vinculava as duas sessões de jogo à mesma conexão. Isso podia entregar **duas visões privadas**
+   — inclusive a mão alheia — a um mesmo cliente, e deixar um assento marcado como conectado para
+   sempre. Corrigido com recusa `session_invalid`, preservando o vínculo existente.
+2. **Sala vazia sem partida nunca descartada:** com `autoDispose = false`, uma sala sem partida e
+   sem ninguém dentro permanecia viva no matchmaking. Corrigido com descarte explícito.
+
+**Ainda não coberto:** o critério **S4 (reconexão) não tem teste automatizado** — o caminho existe
+no código, mas o cenário de queda e retorno (voltar ao mesmo assento com a mesma mão, a sala com 2
+jogadores e sem assento duplicado) não é verificado. Também **não têm teste dedicado** os erros
+`room_full`, `session_invalid` (token desconhecido), `game_finished` e `room_not_found` (código
+errado). Não existem ainda listagem de salas públicas, dono da sala e início manual da partida.
+
+**Próximo passo atômico:** item 6 do gate (auditoria de segurança, teste do S4 e spike do cliente).
 
 ### 5. Spike do cliente mínimo
 
-**Status: aguardando.** Não iniciar cliente até o servidor e os critérios S1–S3 estarem
-implementados e verificados.
+**Status: pronto para iniciar.** A pré-condição desta tarefa — servidor implementado e critérios
+S1–S3 verificados — **está satisfeita**. O S4 ainda depende do cliente, e do teste automatizado do
+critério S4 no servidor (itens 4 e 6).
 **Agente:** `implementer` (layout mínimo com `designer` se necessário) · **Depende:** item 4
 **Pronto quando:** duas abas completam S1–S4 do ADR.
 
 ### 6. Gate do spike
 
-**Status: pendente.** A tentativa de revisão por subagents foi bloqueada por quota do
-provider/modelo; revisão independente e auditoria de segurança ainda não ocorreram. Não declarar
-S1–S4 aprovados.
+**Status: em andamento.** A **revisão independente foi concluída** e os dois achados bloqueantes
+(vínculo de sessão na reconexão; descarte da sala vazia sem partida) foram **corrigidos**, com
+teste de regressão. A **auditoria de segurança ainda não ocorreu**. **Não declarar S1–S4
+aprovados:** S1–S3 têm teste automatizado, **S4 não tem**.
 **Próximas ações, nesta ordem, cada uma como passo atômico:**
 
-1. Corrigir/confirmar configuração pnpm e instalação reproduzível no lockfile; validar com instalação
-   frozen.
-2. Finalizar implementação correta do servidor: entrada por mensagens/opções conforme contrato;
-   geração do código de sala; resposta a payload inválido; validação de ação stale/`matchId`; evitar
-   `Math.random` no código de domínio/infraestrutura e usar RNG apropriado; verificar APIs Colyseus
-   e reconexão.
-3. Criar testes S1–S3 com clientes reais/`colyseus testing`.
-4. Executar typecheck, lint, test, build e format.
-5. Solicitar tester, reviewer e security quando disponíveis.
-6. Só então começar o cliente mínimo e S4.
+1. Auditoria de segurança do servidor do spike (manifestos, configs e trechos sinalizados).
+2. Teste automatizado do critério **S4** (reconexão): queda e retorno preservam assento e mão, sem
+   assento duplicado, e o estado público reflete `connected`.
+3. Testes dedicados para os erros `room_full`, `session_invalid` (token desconhecido),
+   `game_finished` e `room_not_found` (código errado).
+4. Spike do cliente mínimo e S4 ponta a ponta (duas abas completam S1–S4 do ADR).
+5. Execução final de typecheck, lint, test, build e format.
+6. Aprovação do gate, sem achados bloqueantes.
 
 **Agentes:** `tester`, `reviewer`, `security` · **Depende:** item 5
 **Pronto quando:** S1–S4 passam automatizados, zero achados bloqueantes e o ADR é atualizado se

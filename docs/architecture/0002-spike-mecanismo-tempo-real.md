@@ -40,7 +40,14 @@ mensagem privada ou combinação"; o spike usa a segunda forma. Emenda ao ADR-00
 | 5 | Abre o WebSocket em `/{processId}/{roomCode}`; o handshake `JOIN_ROOM` consome a reserva (`_onJoin` → `onJoin`) | `onJoin` **não** senta ninguém: apenas registra a conexão Colyseus |
 | 6 | Envia `create_room { nickname, avatarId }` | Valida com Zod; recusa se o emissor já tem assento de jogo; atribui `playerId` (UUID), `seatIndex` e `sessionToken` (CSPRNG) |
 | 7 | — | Responde `join_accepted { roomCode, matchId, playerId, seatIndex, sessionToken }` **somente ao remetente** |
-| 8 | — | Ainda falta o segundo assento: responde `room_waiting { roomCode, seats }` **somente ao remetente**; `state_public`/`state_private` não existem enquanto a partida não começou (contrato §5) |
+| 8 | — | Ainda falta o segundo assento: responde `room_waiting { roomCode, seats }` a **todos os jogadores sentados e conectados** (nesta etapa, só o remetente); `state_public`/`state_private` não existem enquanto a partida não começou (contrato §5) |
+
+> **`room_waiting` não é mensagem do remetente.** Enquanto a partida não começou, o servidor envia
+> `room_waiting` a **todos os jogadores sentados e conectados** da sala (`publishState`), e não
+> apenas a quem deu a identidade. Isso é o comportamento adequado: o contrato §5 exige apenas que
+> `room_waiting` exista antes do segundo assento, sem exigir exclusividade; o payload é público
+> (`roomCode` e a lista de assentos) e não carrega nada de privado; e todos os sentados passam a
+> ver a mesma presença, sem divergência entre eles.
 
 ### 1.2 Fluxo de entrada por código
 
@@ -52,7 +59,7 @@ mensagem privada ou combinação"; o spike usa a segunda forma. Emenda ao ADR-00
 | 4 | Envia `join_room { roomCode, nickname, avatarId }` | Valida com Zod |
 | 5 | — | Compara `payload.roomCode` com `this.roomId`: divergência ⇒ `error { code: 'room_not_found' }` **somente ao remetente** |
 | 6 | — | Atribui `playerId`, `seatIndex` e `sessionToken`; responde `join_accepted` **somente ao remetente** |
-| 7 | — | Se a partida ainda não começou: `room_waiting` **somente ao remetente**. Se começou (2 assentos de jogo): `state_public` por broadcast + `state_private` **só para este cliente** |
+| 7 | — | Se a partida ainda não começou: `room_waiting` a **todos os jogadores sentados e conectados** (ver a nota da §1.1). Se começou (2 assentos de jogo): `state_public` por broadcast + `state_private` **só para este cliente** |
 
 ### 1.3 Fluxo de reconexão
 
@@ -78,6 +85,13 @@ Consequências que a implementação do spike precisa respeitar:
   (`Room.cjs:1274-1325`). O `sessionToken` do projeto é opaco, vinculado à sessão de **jogo**
   (`playerId`/`seatIndex`), entregue em `join_accepted` e reaplicado por **mensagem** após
   `sdk.joinById`. O spike usa exclusivamente o segundo.
+- **Limite de conexões e reconexão.** Com `maxClients = 2`, a reconexão só passa pelo matchmaking
+  se ainda houver vaga no limite de **conexões Colyseus**. Um cliente cuja conexão antiga **ainda
+  está viva** (aba duplicada, recarregamento antes de o servidor perceber a queda) é barrado **na
+  reserva de assento do matchmaking**, antes de qualquer mensagem: o `SeatReservationError`
+  ("… is already full") chega como falha de `sdk.joinById`, não como `error` de protocolo. A borda
+  do cliente deve tratar essa falha de matchmaking como **`room_full`**, com a mesma tradução da
+  §5.1 — e não como erro de sessão.
 
 ## 2. Identificadores
 
@@ -110,9 +124,12 @@ Regras que decorrem:
 
 Regras:
 
-- **Proibido `Math.random`** em qualquer caminho do servidor (regra 11 do `AGENTS.md`). O código atual
-  em `apps/server/src/rooms/fixture.ts` usa `Math.random` no `generateRoomCode` e precisa ser
-  substituído por CSPRNG.
+- **Proibido `Math.random`** em qualquer caminho do servidor (regra 11 do `AGENTS.md`). A primeira
+  versão da sala gerava o código de sala com `Math.random`; hoje a aleatoriedade de produção vem
+  de `apps/server/src/rooms/random.ts`, único módulo do servidor que sorteia bytes
+  (`cryptoRandomBytes`, o CSPRNG da plataforma) e os converte em **código de sala**
+  (`randomRoomCode`), **token de sessão** (`randomSessionToken`) e **seed da partida**
+  (`randomUint32`). Não há `Math.random` em nenhum caminho de produção.
 - **Proibido RNG global compartilhado.** Cada sala tem a sua própria seed e o seu próprio `Rng`.
 - A seed **nunca** trafega: nem em `state_public`, nem em `state_private`, nem em `events`
   (contrato §4: "Eventos são públicos e nunca contêm carta de mão, baralho restante ou seed").
@@ -180,10 +197,11 @@ o cliente decide o comportamento pelo `code`.
 | Condição (origem) | `code` do protocolo | Quem recebe |
 | --- | --- | --- |
 | Payload de `create_room`/`join_room`/`reconnect`/`action_intent` falha na validação Zod | `invalid_payload` | Somente o remetente |
+| Identidade já informada nesta conexão: segundo `create_room` ou `join_room` na mesma conexão | `invalid_payload` | Somente o remetente |
 | Tipo de mensagem desconhecido (sem handler específico) | `invalid_payload` | Somente o remetente |
 | `join_room`/`reconnect` com `roomCode` diferente do código da sala | `room_not_found` | Somente o remetente |
 | `joinById` com código inexistente (falha no matchmaking, antes do WebSocket) | `room_not_found` | Somente o solicitante (erro HTTP do matchmaking, mapeado na borda do cliente) |
-| `reconnect` com `sessionToken` desconhecido ou expirado | `session_invalid` | Somente o remetente |
+| `reconnect` com `sessionToken` desconhecido ou expirado, ou com o token de **outra** sessão numa conexão já vinculada a uma sessão | `session_invalid` | Somente o remetente |
 | `action_intent` de cliente sem sessão de jogo | `session_invalid` | Somente o remetente |
 | Não há assento de jogo livre (3º jogador) | `room_full` | Somente o remetente |
 | `joinById` com a sala cheia no limite de conexões do Colyseus (falha no matchmaking) | `room_full` | Somente o solicitante (erro HTTP do matchmaking, mapeado na borda do cliente) |
@@ -194,6 +212,19 @@ o cliente decide o comportamento pelo `code`.
 | Motor: partida encerrada | `game_finished` | Somente o remetente |
 | Motor: setup inválido (`invalid_setup`) | `internal` | Somente o remetente |
 | Falha inesperada do servidor | `internal` | Somente o remetente |
+
+Duas condições da tabela não são falhas de payload e precisam ser lidas com cuidado:
+
+- **Identidade já informada na conexão.** Um segundo `create_room` ou `join_room` na mesma conexão
+  é recusado com `invalid_payload`. A condição é o **estado da conexão** — já existe uma sessão de
+  jogo vinculada a ela —, não o conteúdo do payload. O protocolo **não tem um código dedicado**
+  para isso, e `invalid_payload` é o código estável mais próximo do conjunto definido no
+  contrato §5.
+- **`reconnect` com o token de outra sessão.** Uma conexão já vinculada a uma sessão de jogo que
+  apresenta o token de outra sessão é recusada com **`session_invalid`**, e não com
+  `invalid_payload`: o vínculo existente é preservado, para que duas sessões de jogo nunca
+  apontem para a mesma conexão. Numa conexão sem vínculo, apresentar o token é o próprio ato de
+  assumir a sessão.
 
 ### 5.1 Onde cada `error` é entregue
 
@@ -267,9 +298,9 @@ usado como valor de `safeParse`, não como argumento de `onMessage`.
 | a | **`RoomCode` curto é adivinhável.** O código de 6 caracteres tem espaço de busca pequeno, e o `joinById` não tem limite nativo de tentativas | `RoomCode` opaco (contrato §2); `joinById` em `MatchMaker.cjs:229-238` | Alfabeto sem caracteres ambíguos (`0/O`, `1/I/L`) + CSPRNG + **limite de tentativas** por código/IP — limite é **decisão de produto adiada** (§8) |
 | b | **Colisão de `RoomCode` conecta o cliente à sala alheia.** Em `recordRoom`, quando `driver.insert` retorna `false` (código já existente), a sala nova é descartada e `handleCreateRoom` devolve o `_listing` da sala **existente** — o cliente que "criou" a sala seria ligado silenciosamente à sala de outro jogador | `MatchMaker.cjs:424-440`; `LocalDriver.cjs:88-95` | Em `onCreate`, verificar se o código já existe (por exemplo via `matchMaker.getRoomById(code)`, `MatchMaker.cjs:451-453`) e, se existir, regerar com CSPRNG — com número limitado de tentativas e falha explícita se esgotar |
 | c | **`maxClients` do Colyseus ≠ assentos de jogo.** `hasReachedMaxClients` conta `clients.length + reservedSeats`; o número de assentos de jogo é 2 (`0`/`1`). São limites **distintos** que protegem coisas diferentes | `Room.cjs:486-488`; `Room.cjs:1425-1428`; `MatchMaker.cjs:556-558` | Documentar os dois limites explicitamente: `maxClients` protege o número de **conexões Colyseus** (inclusive reservas pendentes e reconexões); o assento de jogo protege a **regra** (nenhum terceiro jogador senta). Com 2 jogadores conectados, um terceiro `joinById` é barrado no matchmaking; com 1 jogador ausente, a reconexão é aceita e o terceiro jogador recebe `room_full` na mensagem |
-| d | **`autoDispose` e limpeza da sala.** Sala vazia que permanece viva ocupa memória; sala que morre cedo encerra a partida | `resetAutoDisposeTimeout` em `Room.cjs:1326-1335`; `#_disposeIfEmpty` em `Room.cjs:1473-1480` | `autoDispose = false` durante a partida; descarte **explícito** quando a partida termina e todos saírem. A limpeza do driver acontece em `#_dispose` (`Room.cjs:1481-1485`), removendo o listing pelo `roomId` |
+| d | **`autoDispose` e limpeza da sala.** Sala vazia que permanece viva ocupa memória; sala que morre cedo encerra a partida | `resetAutoDisposeTimeout` em `Room.cjs:1326-1335`; `#_disposeIfEmpty` em `Room.cjs:1473-1480` | `autoDispose = false` durante a partida; o descarte é **explícito** e cobre dois casos: (a) sala **vazia sem partida iniciada** — não há estado de jogo nem assento de reconexão a preservar — e (b) **partida encerrada** com todos desconectados. A partida **em andamento** com todos desconectados **permanece viva**, na espera da decisão de produto sobre a janela de reconexão (§8, item 1). A limpeza do driver acontece em `#_dispose` (`Room.cjs:1481-1485`), removendo o listing pelo `roomId` |
 | e | **Seed influenciada pelo cliente.** `options` do matchmaking é inteiramente do cliente em produção | `MatchMaker.cjs:376`; `Room.cjs:1220-1221` | Seed gerada por CSPRNG dentro da sala, por método `protected` não alcançável pelo cliente (§4) |
-| f | **`Math.random` em caminho de produção.** O código atual gera o código de sala com `Math.random` | `apps/server/src/rooms/fixture.ts` (implementação atual, a ser reescrita) | CSPRNG (`crypto.getRandomValues`) em todo caminho aleatório; `Math.random` proibido (regra 11 do `AGENTS.md`) |
+| f | **`Math.random` em caminho de produção.** A primeira versão da sala gerava o código de sala com `Math.random` | `apps/server/src/rooms/fixture.ts`; `apps/server/src/rooms/random.ts` | **Mitigado.** `apps/server/src/rooms/random.ts` é a **porta de entrada única** da aleatoriedade do servidor: `cryptoRandomBytes` (CSPRNG da plataforma), `randomRoomCode`, `randomSessionToken` e `randomUint32`. O sorteio do código de sala é **por rejeição** (bytes fora da janela de aceitação são descartados), o que evita o viés de módulo; a fonte de bytes é injetável, mas só o **teste** a substitui, e a sala de teste sobrescreve **apenas** `createMatchSeed`. `Math.random` não aparece em nenhum caminho de produção (regra 11 do `AGENTS.md`) |
 | g | **Colyseus derruba a conexão em payload inválido** quando se usa a sobrecarga com schema | `RoomMessages.cjs:151-158`; `utils/StandardSchema.cjs:27-36` | Validação manual com `safeParse` dentro do handler + `error { invalid_payload }` (§6.1) |
 | h | **Mensagem sem handler derruba a conexão em produção** | `RoomMessages.cjs:278-291` | Handler curinga `'*'` sempre registrado (§6.2) |
 | i | **Erro do matchmaking não é mensagem `error`.** A falha de `joinById` acontece antes do WebSocket e chega como `MatchMakeError` | `sdk/src/Client.ts:444-451`; `MatchMaker.cjs:229-238`; `MatchMaker.cjs:556-558` | A borda do cliente traduz o erro de matchmaking para o mesmo conjunto de `code` do protocolo (§5.1) |
@@ -326,10 +357,54 @@ Todos os fatos abaixo foram conferidos no código instalado
 | 25 | `#_dispose` remove o listing do driver por `this._listing.roomId` | `Room.cjs:1481-1485` |
 | 26 | Falha de matchmaking chega ao cliente como `MatchMakeError`, com o código Colyseus preservado | `sdk/src/Client.ts:444-451` |
 
+### 9.1 Estado verificado do spike
+
+Enquanto a §9 registra fatos sobre o **Colyseus**, esta subseção registra o estado do **código do
+projeto**, conferido em `apps/server/src/rooms/` e nos testes de integração.
+
+**Implementado e coberto por teste automatizado:**
+
+- **Fluxo de criar, entrar e reconectar**: `create_room`, `join_room` e `reconnect` são tratados
+  pela sala, e a identidade do jogador chega por **mensagem**, não pelo `options` do matchmaking.
+- **Estado autoritativo**: a intenção do cliente é validada e aplicada no servidor; a ação
+  inválida é recusada com `error` **só ao remetente** e não altera o estado de nenhum cliente.
+- **Isolamento da visão privada por conexão**: `state_private` é enviada **por conexão**, com a
+  visão calculada para o dono; a verificação varre o payload estruturado e o JSON bruto de tudo
+  que cada conexão recebeu, e nenhum identificador da mão alheia aparece.
+- **Códigos de erro do contrato com teste dedicado**: `invalid_payload`, `not_your_turn`,
+  `card_not_in_hand`, `stale_state`, `match_not_found` e `session_invalid`.
+- **Validação manual com `safeParse`** em cada handler: payload inválido é recusado com
+  `invalid_payload` **sem derrubar a conexão**.
+- **Descarte da sala**: a sala vazia **sem partida iniciada** é descartada do matchmaking.
+
+**Ainda não coberto:**
+
+- **S4 (reconexão) não tem teste automatizado.** O caminho de reconexão existe no código, mas o
+  cenário de queda e retorno — voltar ao mesmo assento com a mesma mão, a sala com 2 jogadores e
+  sem assento duplicado — ainda não é verificado. O que existe hoje é o teste do **conflito de
+  vínculo**: uma conexão já presa a uma sessão que apresenta o token de outra é recusada com
+  `session_invalid`, sem vazar a visão privada alheia.
+- **Erros sem teste dedicado**: `room_full`, `session_invalid` por token **desconhecido**,
+  `game_finished` e `room_not_found` por código errado.
+- **Não existem ainda**: listagem de salas públicas, dono da sala e início manual da partida
+  (§8, itens 4 e 5).
+
+**Onde estão os testes:**
+
+- `apps/server/src/rooms/fixture.integration.test.ts` — os testes de integração (S1–S3, o conflito
+  de vínculo na reconexão e o ciclo de vida da sala).
+- `apps/server/src/rooms/fixture.integration.helper.ts` — o harness: sobe um servidor Colyseus
+  real, conecta clientes reais do SDK oficial e acumula **todas** as mensagens recebidas por
+  conexão (o "payload bruto" exigido pelo ADR-001).
+- A sala de teste é a classe `SeededFixtureRoom`, em `apps/server/src/rooms/fixture.test-helper.ts`:
+  estende a sala de produção e sobrescreve **apenas** `createMatchSeed`, devolvendo
+  `TEST_MATCH_SEED = 42`. Ela é registrada no servidor de teste com o nome **`fixture-test`**,
+  distinto do nome de produção (`fixture`), de modo que nenhum cliente real alcança a sala de
+  seed fixa (§4.1).
+
 ## 10. Emenda ao ADR-001 (texto pronto para o `documenter`)
 
-> **Não** editada aqui: o texto abaixo deve ser inserido em `docs/adr/0001-stack.md` pelo
-> `documenter`, em um passo próprio.
+> Texto aplicado no ADR-001 em 2026-11-12 (ver `docs/adr/0001-stack.md`, Emenda 1).
 
 ```markdown
 ### Emenda 1 (2026-11-12) — Projeção por jogador sem `StateView` de schema

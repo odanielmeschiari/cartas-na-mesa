@@ -2,7 +2,7 @@
 
 Plataforma web de jogos de cartas para jogar rapidamente, sem cadastro: sozinho contra bots, aprendendo com tutoriais ou com amigos em uma sala online.
 
-> **Estado do projeto:** fundação do monorepo, protocolo compartilhado e motor fixture estão implementados. O spike do servidor Colyseus ainda está em andamento; criação/entrada de salas, reconexão e testes de integração S1–S3 não estão concluídos. Ainda não é uma versão pronta para jogar.
+> **Estado do projeto:** fundação do monorepo, protocolo compartilhado e motor fixture estão implementados. O servidor do spike está implementado conforme o contrato de rede, com testes de integração S1–S3 automatizados, usando servidor e clientes Colyseus reais. Ainda falta o cliente do spike, o critério S4 (reconexão) e a auditoria de segurança. Ainda não é uma versão pronta para jogar.
 
 ## Visão do produto
 
@@ -60,7 +60,7 @@ pnpm typecheck
 pnpm format:check
 ```
 
-O projeto usa uma dependência Git transitiva do Colyseus (`uWebSockets.js`). No ambiente em que o spike foi preparado, a instalação pnpm precisou de `PNPM_CONFIG_BLOCK_EXOTIC_SUBDEPS=false`; a instalação reproduzível com lockfile ainda precisa ser validada. Consulte `next_tasks.md` antes de retomar o trabalho.
+O projeto usa uma dependência Git transitiva do Colyseus (`uWebSockets.js`) e por isso define `blockExoticSubdeps: false` em `pnpm-workspace.yaml` (o pnpm 12 lê as opções do projeto de `pnpm-workspace.yaml`; do `.npmrc` só lê auth, registry, TLS, proxy e endereço local). A instalação reproduzível com lockfile foi validada com `pnpm install --frozen-lockfile`, e o `pnpm-lock.yaml` está commitado. Consulte `next_tasks.md` antes de retomar o trabalho.
 
 ## Arquitetura e contribuição
 
