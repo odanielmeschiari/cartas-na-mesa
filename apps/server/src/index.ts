@@ -1,0 +1,1 @@
+export { colyseusServer } from './server';

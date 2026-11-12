@@ -1,0 +1,20 @@
+{
+  "name": "@cartas-na-mesa/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "tsx": "4.23.15"
+  },
+  "dependencies": {
+    "@cartas-na-mesa/core": "workspace:*",
+    "@cartas-na-mesa/protocol": "workspace:*",
+    "colyseus": "0.18.12",
+    "zod": "4.6.7"
+  }
+}

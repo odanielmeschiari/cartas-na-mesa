@@ -1,0 +1,30 @@
+{
+  "name": "cartas-na-mesa",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.18.0",
+  "engines": {
+    "node": ">=22.13.0 <23"
+  },
+  "scripts": {
+    "dev": "pnpm -r --parallel --filter @cartas-na-mesa/web --filter @cartas-na-mesa/server run dev",
+    "build": "pnpm -r --if-present run build",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "lint": "eslint .",
+    "typecheck": "pnpm -r run typecheck && tsc --noEmit -p tsconfig.base.json",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@playwright/test": "1.65.0",
+    "@types/node": "22.20.5",
+    "eslint": "10.14.0",
+    "prettier": "3.10.1",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.72.2",
+    "vitest": "5.1.0"
+  }
+}
