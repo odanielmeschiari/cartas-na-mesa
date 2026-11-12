@@ -1,1 +1,48 @@
 @import 'tailwindcss';
+
+:root {
+  /*
+   * Foco visível: contorno de 3px com contraste acima de 3:1 contra o fundo
+   * claro da tela e dos cartões. O contorno padrão do navegador não é
+   * removido em lugar nenhum — ele é substituído por um de contraste
+   * garantido, só quando o navegador identifica foco por teclado
+   * (`:focus-visible`).
+   */
+  --cnm-focus: #1d4ed8;
+
+  /*
+   * A tela do spike é clara em qualquer tema do sistema: os controles de
+   * formulário renderizam no mesmo modo, sem variação de contraste.
+   */
+  color-scheme: light;
+}
+
+:focus-visible {
+  outline: 3px solid var(--cnm-focus);
+  outline-offset: 2px;
+}
+
+/*
+ * Movimento: só existe transição curta quando o usuário aceita movimento.
+ * Com `prefers-reduced-motion: reduce`, nenhuma transição nem animação roda
+ * — inclusive as herdadas de utilitários.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  .cnm-interactive {
+    transition:
+      background-color 120ms ease-out,
+      border-color 120ms ease-out,
+      color 120ms ease-out;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

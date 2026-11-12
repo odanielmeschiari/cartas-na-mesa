@@ -1,5 +1,5 @@
 /**
- * Harness dos testes de integração do spike (S1–S3).
+ * Harness dos testes de integração do spike (S1–S4).
  *
  * Sobe um servidor Colyseus real, conecta clientes reais do SDK oficial e
  * acumula **todas** as mensagens recebidas por conexão. As asserções do
