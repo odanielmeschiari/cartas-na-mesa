@@ -9,6 +9,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@cartas-na-mesa/protocol": "workspace:*",
+    "@colyseus/sdk": "0.18.10",
     "react": "19.3.1",
     "react-dom": "19.3.1"
   },
