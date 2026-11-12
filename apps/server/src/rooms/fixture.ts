@@ -30,6 +30,20 @@ import { randomRoomCode, randomSessionToken, randomUint32 } from './random';
 const MAX_ROOM_CODE_ATTEMPTS = 5;
 
 /**
+ * Prazo que uma conexão pode ficar sem se identificar antes de ser encerrada.
+ *
+ * `maxClients` do Colyseus limita **conexões**, não assentos de jogo: uma
+ * conexão que nunca se identifica ocupa uma das vagas e barra o jogador
+ * legítimo no matchmaking (risco c do doc 0002). O prazo é generoso o bastante
+ * para uma rede lenta e curto o bastante para não segurar a sala
+ * indefinidamente.
+ */
+const IDENTITY_TIMEOUT_MS = 30_000;
+
+/** Timeout agendado no relógio da sala; cancelado por `clear()`. */
+type ScheduledTimeout = ReturnType<Room['clock']['setTimeout']>;
+
+/**
  * Texto fixo dos erros da infraestrutura: seguro para exibição, sem eco do
  * payload do cliente e sem detalhe interno. Os erros do motor trazem a própria
  * mensagem, que também é texto de exibição.
@@ -92,6 +106,9 @@ export class FixtureRoom extends Room {
   /** Sessão de jogo por `sessionId` da conexão Colyseus. */
   private readonly sessionByClient = new Map<string, PlayerSession>();
 
+  /** Prazo de identidade pendente, por `sessionId` da conexão Colyseus. */
+  private readonly identityTimeouts = new Map<string, ScheduledTimeout>();
+
   override async onCreate(): Promise<void> {
     this.roomCode = await this.generateRoomCode();
 
@@ -113,12 +130,45 @@ export class FixtureRoom extends Room {
    * mensagem de identidade (`create_room` / `join_room` / `reconnect`). Na
    * reconexão o `onJoin` roda de novo, com outro `sessionId`; sentar aqui
    * duplicaria o assento.
+   *
+   * O que o `onJoin` faz é armar o prazo de identidade: uma conexão que nunca
+   * se identifica não pode segurar uma das vagas de conexão do Colyseus.
    */
-  override onJoin(): void {
-    // intencionalmente vazio
+  override onJoin(client: Client): void {
+    const delayed = this.clock.setTimeout(() => {
+      this.identityTimeouts.delete(client.sessionId);
+
+      // Identificar-se cancela o prazo antes; se a conexão ainda estiver sem
+      // identidade, ela seguraria uma vaga de conexão indefinidamente.
+      if (!this.sessionByClient.has(client.sessionId)) {
+        client.leave(4000, 'identity_timeout');
+      }
+    }, this.identityTimeoutMs());
+
+    this.identityTimeouts.set(client.sessionId, delayed);
+  }
+
+  /**
+   * Prazo de identidade em milissegundos. É a costura de teste: a sala de
+   * teste sobrescreve este método para encurtar o prazo (doc 0002 §4).
+   */
+  protected identityTimeoutMs(): number {
+    return IDENTITY_TIMEOUT_MS;
   }
 
   override async onLeave(client: Client): Promise<void> {
+    this.unbindSession(client);
+    this.cancelIdentityTimeout(client);
+    this.publishState();
+    await this.disposeIfFinished();
+  }
+
+  /**
+   * Desvincula a sessão de jogo da conexão que saiu. O assento é preservado
+   * (a reconexão é possível); o que muda é a presença, que vira
+   * `connected: false`.
+   */
+  private unbindSession(client: Client): void {
     const session = this.sessionByClient.get(client.sessionId);
     if (session === undefined) {
       return;
@@ -131,11 +181,21 @@ export class FixtureRoom extends Room {
     if (session.clientSessionId === client.sessionId) {
       session.clientSessionId = null;
     }
+  }
 
-    // O assento de jogo é preservado para a reconexão; `connected` vira false.
-    this.publishState();
+  /**
+   * Cancela o prazo de identidade da conexão, se ainda estiver pendente. A
+   * entrada do mapa é removida junto: um prazo já disparado não pode ficar
+   * pendurado na sala.
+   */
+  private cancelIdentityTimeout(client: Client): void {
+    const delayed = this.identityTimeouts.get(client.sessionId);
+    if (delayed === undefined) {
+      return;
+    }
 
-    await this.disposeIfFinished();
+    this.identityTimeouts.delete(client.sessionId);
+    delayed.clear();
   }
 
   /**
@@ -241,7 +301,19 @@ export class FixtureRoom extends Room {
 
     const previousClientSessionId = session.clientSessionId;
     if (previousClientSessionId !== null && previousClientSessionId !== client.sessionId) {
-      // A conexão antiga ainda ocupa a sessão: encerra-a para que a nova
+      // A conexão antiga perde a autorização **imediatamente**. O `leave` é
+      // assíncrono: enquanto ele não conclui, a conexão antiga ainda
+      // constaria em `sessionByClient` e poderia enviar `action_intent` — uma
+      // jogada duplicada ou fora de ordem. Por isso o desvinculo vem antes do
+      // `leave`.
+      //
+      // A guarda "uma sessão por conexão" continua válida: ela compara
+      // `sessionByClient.get(client.sessionId)` — a conexão **nova** — com a
+      // sessão do token, e o desvinculo remove a entrada da conexão
+      // **antiga**, que é outra.
+      this.sessionByClient.delete(previousClientSessionId);
+
+      // A conexão antiga ainda ocupa a sala: encerra-a para que a nova
       // assuma o assento. `leave` é o successor de `close`, que está
       // depreciado e emite aviso de depreciação a cada uso.
       this.clients.get(previousClientSessionId)?.leave(4000, 'session_replaced');
@@ -249,6 +321,10 @@ export class FixtureRoom extends Room {
 
     session.clientSessionId = client.sessionId;
     this.sessionByClient.set(client.sessionId, session);
+
+    // Identidade confirmada: o prazo de identidade não deve encerrar a
+    // conexão.
+    this.cancelIdentityTimeout(client);
 
     this.sendJoinAccepted(client, session);
     this.publishState();
@@ -333,7 +409,14 @@ export class FixtureRoom extends Room {
       try {
         this.startMatch([...this.sessionsByToken.values(), session]);
       } catch (error) {
-        console.error(`[${this.roomCode}] falha ao iniciar a partida:`, error);
+        // O log não pode expor o `roomCode`: ele é o `roomId` do Colyseus e,
+        // portanto, a credencial de acesso à sala. O `matchId` identifica a
+        // partida sem revelar a credencial, e a mensagem do erro dispensa a
+        // pilha (caminhos do servidor).
+        console.error(
+          `[${this.matchId}] falha ao iniciar a partida:`,
+          error instanceof Error ? error.message : String(error),
+        );
         this.sendError(client, 'internal', ERROR_MESSAGES.internal);
         return;
       }
@@ -341,6 +424,10 @@ export class FixtureRoom extends Room {
 
     this.sessionsByToken.set(session.sessionToken, session);
     this.sessionByClient.set(client.sessionId, session);
+
+    // Identidade confirmada: o prazo de identidade não deve encerrar a
+    // conexão.
+    this.cancelIdentityTimeout(client);
 
     this.sendJoinAccepted(client, session);
     this.publishState();

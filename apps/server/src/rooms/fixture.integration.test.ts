@@ -19,7 +19,7 @@
  */
 
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import type { ColyseusSDK } from '@colyseus/sdk';
+import type { ColyseusSDK, Room as SdkRoom } from '@colyseus/sdk';
 import type { ColyseusTestServer } from '@colyseus/testing';
 import { matchMaker } from 'colyseus';
 
@@ -30,7 +30,10 @@ import {
   awaitStateVersion,
   closeAllConnections,
   connectGuest,
+  connectGuestWhenAvailable,
   connectHost,
+  connectWithoutIdentity,
+  joinWithoutIdentity,
   lastStatePrivate,
   lastStatePublic,
   payloadValuesMatching,
@@ -39,6 +42,7 @@ import {
   startTestServer,
   stateVersions,
   stringValues,
+  TEST_TIMEOUT_ROOM_NAME,
   validateMessages,
   waitFor,
   type TestConnection,
@@ -46,6 +50,12 @@ import {
 
 /** Margem para as esperas por mensagem, que são o único ponto lento do teste. */
 const TEST_TIMEOUT_MS = 20_000;
+
+/** Código de encerramento que o servidor usa para a conexão sem identidade. */
+const IDENTITY_TIMEOUT_CLOSE_CODE = 4000;
+
+/** Motivo do encerramento que o servidor envia junto do código. */
+const IDENTITY_TIMEOUT_REASON = 'identity_timeout';
 
 let testServer: ColyseusTestServer;
 let sdk: ColyseusSDK;
@@ -75,6 +85,27 @@ function playCard(
     matchId,
     stateVersion,
     action: { type: 'play_card', cardId },
+  });
+}
+
+/**
+ * Espera a conexão ser encerrada e devolve o código e o motivo do
+ * encerramento. O tempo limite evita que o teste fique pendurado quando a
+ * saída nunca acontece.
+ */
+function waitForLeave(
+  room: SdkRoom,
+  timeoutMs: number = 5_000,
+): Promise<{ code: number; reason: string | undefined }> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`Timeout de ${timeoutMs} ms esperando a conexão ser encerrada.`));
+    }, timeoutMs);
+
+    room.onLeave((code: number, reason?: string) => {
+      clearTimeout(timer);
+      resolve({ code, reason });
+    });
   });
 }
 
@@ -578,6 +609,118 @@ describe('Ciclo de vida da sala', () => {
       // assento): a sala não tem mais o que preservar.
       await host.room.leave();
 
+      await waitFor(
+        async () => (await matchMaker.getRoomById(roomCode)) === undefined,
+        `a sala "${roomCode}" ser descartada do matchmaking`,
+      );
+
+      expect(await matchMaker.getRoomById(roomCode)).toBeUndefined();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'descarta a sala vazia sem identidade e sem partida',
+    async () => {
+      // A sala é criada, mas a conexão nunca informa a identidade: não há
+      // sessão de jogo, assento nem partida a preservar.
+      const room = await connectWithoutIdentity(sdk);
+      const roomCode = room.roomId;
+
+      expect(await matchMaker.getRoomById(roomCode)).toBeDefined();
+
+      // A conexão sai. Sem o descarte explícito, a sala ficaria registrada no
+      // matchmaking para sempre (com `autoDispose` desligado, o Colyseus não
+      // descarta a sala vazia por conta própria).
+      await room.leave();
+
+      await waitFor(
+        async () => (await matchMaker.getRoomById(roomCode)) === undefined,
+        `a sala "${roomCode}" ser descartada do matchmaking`,
+      );
+
+      expect(await matchMaker.getRoomById(roomCode)).toBeUndefined();
+    },
+    TEST_TIMEOUT_MS,
+  );
+});
+
+describe('Prazo de identidade — a conexão sem identidade não segura a sala', () => {
+  it(
+    'encerra a conexão sem identidade quando o prazo expira e libera a vaga do jogador legítimo',
+    async () => {
+      // O primeiro jogador ocupa o assento 0.
+      const host = await connectHost(sdk, 'Ana', TEST_TIMEOUT_ROOM_NAME);
+      const hostAccepted = await awaitJoinAccepted(host);
+      const roomCode = hostAccepted.roomCode;
+
+      let hostLeft = false;
+      host.room.onLeave(() => {
+        hostLeft = true;
+      });
+
+      // Uma segunda conexão entra sem se identificar: consome a última vaga de
+      // conexão do Colyseus sem ocupar nenhum assento de jogo.
+      const intruder = await joinWithoutIdentity(sdk, roomCode);
+      const intruderLeave = waitForLeave(intruder);
+
+      // O jogador legítimo é barrado no matchmaking: há assento de jogo livre,
+      // mas não há vaga de conexão.
+      await expect(sdk.joinById(roomCode)).rejects.toThrow(/is locked|is already full/);
+
+      // O prazo de identidade expira: a conexão sem identidade é encerrada
+      // pelo servidor.
+      const leave = await intruderLeave;
+      expect(leave.code).toBe(IDENTITY_TIMEOUT_CLOSE_CODE);
+      expect(leave.reason).toBe(IDENTITY_TIMEOUT_REASON);
+
+      // A conexão que já se identificou não foi encerrada: o prazo vale só
+      // para quem não se identificou.
+      expect(hostLeft).toBe(false);
+      expect(host.messages.error).toEqual([]);
+
+      // A vaga foi liberada: o jogador legítimo entra e senta no segundo
+      // assento.
+      const guest = await connectGuestWhenAvailable(sdk, roomCode, 'Bia');
+      const guestAccepted = await awaitJoinAccepted(guest);
+      expect(guestAccepted.seatIndex).toBe(1);
+      expect(guestAccepted.matchId).toBe(hostAccepted.matchId);
+
+      await awaitStateVersion(host, 0);
+      await awaitStateVersion(guest, 0);
+
+      // A partida continua jogável depois do prazo de identidade.
+      const cardId = at(lastStatePrivate(host).view.hand, 0, 'a mão de Ana');
+      playCard(host, guestAccepted.matchId, 0, cardId);
+      await awaitStateVersion(host, 1);
+      await awaitStateVersion(guest, 1);
+
+      expect(lastStatePublic(host).game.table).toHaveLength(1);
+      expect(lastStatePublic(guest)).toEqual(lastStatePublic(host));
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'encerra as duas conexões sem identidade quando o prazo expira e descarta a sala vazia',
+    async () => {
+      const roomA = await connectWithoutIdentity(sdk, TEST_TIMEOUT_ROOM_NAME);
+      const roomCode = roomA.roomId;
+      const leaveA = waitForLeave(roomA);
+
+      // A segunda conexão sem identidade também é aceita: há vaga de conexão.
+      const roomB = await joinWithoutIdentity(sdk, roomCode);
+      const leaveB = waitForLeave(roomB);
+
+      const closedA = await leaveA;
+      expect(closedA.code).toBe(IDENTITY_TIMEOUT_CLOSE_CODE);
+      expect(closedA.reason).toBe(IDENTITY_TIMEOUT_REASON);
+
+      const closedB = await leaveB;
+      expect(closedB.code).toBe(IDENTITY_TIMEOUT_CLOSE_CODE);
+      expect(closedB.reason).toBe(IDENTITY_TIMEOUT_REASON);
+
+      // A sala ficou vazia e nunca teve partida: é descartada do matchmaking.
       await waitFor(
         async () => (await matchMaker.getRoomById(roomCode)) === undefined,
         `a sala "${roomCode}" ser descartada do matchmaking`,

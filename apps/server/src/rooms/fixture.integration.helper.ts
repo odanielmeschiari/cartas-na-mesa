@@ -28,13 +28,19 @@ import {
 } from '@cartas-na-mesa/protocol';
 
 import { createGameServer } from '../server';
-import { SeededFixtureRoom } from './fixture.test-helper';
+import { SeededFixtureRoom, ShortTimeoutFixtureRoom } from './fixture.test-helper';
 
 /**
  * Nome da sala de teste. Diferente do nome de produção de propósito: nenhum
  * cliente real pode alcançar a sala com a seed fixa (doc 0002 §4.1).
  */
 export const TEST_ROOM_NAME = 'fixture-test';
+
+/**
+ * Nome da sala de teste do prazo de identidade. Também distinto do nome de
+ * produção: nenhum cliente real pode alcançar a sala com prazo curto.
+ */
+export const TEST_TIMEOUT_ROOM_NAME = 'fixture-timeout-test';
 
 /** Tempo máximo de espera por uma mensagem. */
 export const WAIT_TIMEOUT_MS = 5_000;
@@ -170,28 +176,66 @@ export async function waitFor(
 /** Conexões abertas nesta execução, para o descarte no fim de cada teste. */
 const openConnections = new Set<TestConnection>();
 
+/** Salas abertas sem identidade, para o descarte no fim de cada teste. */
+const openRooms = new Set<Room>();
+
 /** Fecha todas as conexões abertas e esvazia o registro. */
 export async function closeAllConnections(): Promise<void> {
   const connections = [...openConnections];
   openConnections.clear();
-  await Promise.all(connections.map((connection) => connection.room.leave()));
+  const rooms = [...openRooms];
+  openRooms.clear();
+  await Promise.all([
+    ...connections.map((connection) => connection.room.leave()),
+    ...rooms.map((room) => room.leave()),
+  ]);
 }
 
-/** Sobe o servidor Colyseus real com a sala de seed fixa. */
+/**
+ * Sobe o servidor Colyseus real com as salas de teste: a de seed fixa e a de
+ * prazo de identidade curto. Os dois nomes são distintos do nome de produção.
+ */
 export async function startTestServer(): Promise<ColyseusTestServer> {
   const server = createGameServer({
-    roomTypes: { [TEST_ROOM_NAME]: SeededFixtureRoom },
+    roomTypes: {
+      [TEST_ROOM_NAME]: SeededFixtureRoom,
+      [TEST_TIMEOUT_ROOM_NAME]: ShortTimeoutFixtureRoom,
+    },
   });
   return boot(server);
 }
 
 /** Cria a sala e informa a identidade do primeiro jogador. */
-export async function connectHost(sdk: ColyseusSDK, nickname: string): Promise<TestConnection> {
-  const room = await sdk.create(TEST_ROOM_NAME);
+export async function connectHost(
+  sdk: ColyseusSDK,
+  nickname: string,
+  roomName: string = TEST_ROOM_NAME,
+): Promise<TestConnection> {
+  const room = await sdk.create(roomName);
   const connection = new TestConnection(room);
   openConnections.add(connection);
   room.send('create_room', { type: 'create_room', nickname, avatarId: null });
   return connection;
+}
+
+/**
+ * Cria a sala e **não** informa a identidade: a conexão fica sem sessão de
+ * jogo, segurando uma das vagas de conexão do Colyseus.
+ */
+export async function connectWithoutIdentity(
+  sdk: ColyseusSDK,
+  roomName: string = TEST_ROOM_NAME,
+): Promise<Room> {
+  const room = await sdk.create(roomName);
+  openRooms.add(room);
+  return room;
+}
+
+/** Entra na sala pelo código, sem informar a identidade. */
+export async function joinWithoutIdentity(sdk: ColyseusSDK, roomCode: string): Promise<Room> {
+  const room = await sdk.joinById(roomCode);
+  openRooms.add(room);
+  return room;
 }
 
 /** Entra na sala pelo código e informa a identidade do segundo jogador. */
@@ -204,6 +248,50 @@ export async function connectGuest(
   const connection = new TestConnection(room);
   openConnections.add(connection);
   room.send('join_room', { type: 'join_room', roomCode, nickname, avatarId: null });
+  return connection;
+}
+
+/**
+ * Entra na sala pelo código repetindo o pedido de matchmaking até ser aceito.
+ *
+ * A sala pode levar alguns milissegundos para liberar a vaga de conexão de
+ * quem acabou de sair; o pedido repetido é a forma de esperar por essa
+ * liberação sem depender de relógio.
+ */
+export async function connectGuestWhenAvailable(
+  sdk: ColyseusSDK,
+  roomCode: string,
+  nickname: string,
+): Promise<TestConnection> {
+  let connection: TestConnection | undefined;
+  let lastError: unknown;
+
+  try {
+    await waitFor(async () => {
+      try {
+        const room = await sdk.joinById(roomCode);
+        connection = new TestConnection(room);
+        openConnections.add(connection);
+        room.send('join_room', { type: 'join_room', roomCode, nickname, avatarId: null });
+        return true;
+      } catch (error) {
+        // A vaga de conexão ainda não foi liberada: a espera é reavaliada.
+        lastError = error;
+        return false;
+      }
+    }, `a conexão de "${nickname}" ser aceita na sala "${roomCode}"`);
+  } catch (error) {
+    throw new Error(
+      `Não foi possível entrar na sala "${roomCode}": ` +
+        `${lastError instanceof Error ? lastError.message : String(error)}`,
+      { cause: error },
+    );
+  }
+
+  if (connection === undefined) {
+    throw new Error(`Não foi possível entrar na sala "${roomCode}".`);
+  }
+
   return connection;
 }
 
