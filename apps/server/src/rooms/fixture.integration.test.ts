@@ -1,0 +1,505 @@
+/**
+ * Testes de integração do spike do servidor (ADR-001, critérios S1–S3).
+ *
+ * Os testes sobem um servidor Colyseus real e conectam **dois clientes reais**
+ * do SDK oficial: nada é simulado. A sala é a mesma da produção, com a seed
+ * fixa 42 (doc 0002 §4), o que torna a distribuição das cartas determinística
+ * sem que o teste precise conhecer as cartas de antemão.
+ *
+ * O que se observa é **o que o cliente recebe**: as asserções nunca leem o
+ * estado interno da sala. As mensagens recebidas são validadas pelos schemas
+ * Zod de `@cartas-na-mesa/protocol`, o que prova ao mesmo tempo que o
+ * servidor respeita o contrato e que o payload é bem formado.
+ *
+ * Critérios cobertos (docs/architecture/0001-fixture-contract.md §7):
+ * - S1: duas conexões na mesma sala, pelo código.
+ * - S2: estado autoritativo; ação inválida não muda nada e o erro é só do
+ *   remetente.
+ * - S3: informação oculta por jogador, verificada sobre o payload bruto.
+ */
+
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import type { ColyseusSDK } from '@colyseus/sdk';
+import type { ColyseusTestServer } from '@colyseus/testing';
+
+import {
+  at,
+  awaitError,
+  awaitJoinAccepted,
+  awaitStateVersion,
+  closeAllConnections,
+  connectGuest,
+  connectHost,
+  lastStatePrivate,
+  lastStatePublic,
+  payloadValuesMatching,
+  rawJsonMatching,
+  setupMatch,
+  startTestServer,
+  stateVersions,
+  stringValues,
+  validateMessages,
+  type TestConnection,
+} from './fixture.integration.helper';
+
+/** Margem para as esperas por mensagem, que são o único ponto lento do teste. */
+const TEST_TIMEOUT_MS = 20_000;
+
+let testServer: ColyseusTestServer;
+let sdk: ColyseusSDK;
+
+beforeAll(async () => {
+  testServer = await startTestServer();
+  sdk = testServer.sdk;
+}, TEST_TIMEOUT_MS);
+
+afterEach(async () => {
+  await closeAllConnections();
+});
+
+afterAll(async () => {
+  await testServer.shutdown();
+});
+
+/** Envia uma intenção de jogada bem formada (a validação é do servidor). */
+function playCard(
+  connection: TestConnection,
+  matchId: string,
+  stateVersion: number,
+  cardId: string,
+): void {
+  connection.room.send('action_intent', {
+    type: 'action_intent',
+    matchId,
+    stateVersion,
+    action: { type: 'play_card', cardId },
+  });
+}
+
+describe('S1 — duas conexões na mesma sala', () => {
+  it(
+    'cria a sala, devolve um código e aceita o segundo jogador pelo mesmo código',
+    async () => {
+      const host = await connectHost(sdk, 'Ana');
+      const hostAccepted = await awaitJoinAccepted(host);
+
+      // O código da sala é o identificador devolvido pelo matchmaking.
+      expect(hostAccepted.roomCode).toBe(host.room.roomId);
+      expect(hostAccepted.roomCode.length).toBeGreaterThan(0);
+      expect(hostAccepted.matchId.length).toBeGreaterThan(0);
+
+      const guest = await connectGuest(sdk, hostAccepted.roomCode, 'Bia');
+      const guestAccepted = await awaitJoinAccepted(guest);
+
+      // Mesma sala e mesma partida; jogadores e assentos distintos.
+      expect(guestAccepted.roomCode).toBe(hostAccepted.roomCode);
+      expect(guestAccepted.matchId).toBe(hostAccepted.matchId);
+      expect(guestAccepted.playerId).not.toBe(hostAccepted.playerId);
+      expect(guestAccepted.seatIndex).not.toBe(hostAccepted.seatIndex);
+      expect(new Set([hostAccepted.seatIndex, guestAccepted.seatIndex])).toEqual(new Set([0, 1]));
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'não publica estado de partida antes do segundo assento',
+    async () => {
+      const host = await connectHost(sdk, 'Ana');
+      await host.waitFor(() => host.messages.room_waiting.length > 0, 'a mensagem "room_waiting"');
+
+      const waiting = at(validateMessages(host.messages).room_waiting, 0, 'room_waiting');
+      const onlySeat = at(waiting.seats, 0, 'room_waiting.seats');
+      expect(waiting.seats).toHaveLength(1);
+      expect(onlySeat.seatIndex).toBe(0);
+      expect(onlySeat.nickname).toBe('Ana');
+      expect(onlySeat.connected).toBe(true);
+
+      // Sem o segundo assento não existe partida: nem estado público nem privado.
+      expect(host.messages.state_public).toEqual([]);
+      expect(host.messages.state_private).toEqual([]);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'publica o mesmo estado público, com exatamente dois assentos, para os dois jogadores',
+    async () => {
+      const { host, guest } = await setupMatch(sdk);
+
+      const hostState = at(validateMessages(host.messages).state_public, 0, 'state_public de Ana');
+      const guestState = at(
+        validateMessages(guest.messages).state_public,
+        0,
+        'state_public de Bia',
+      );
+
+      expect(hostState.seats).toHaveLength(2);
+      expect(guestState.seats).toHaveLength(2);
+      expect(hostState.seats.map((seat) => seat.seatIndex)).toEqual([0, 1]);
+      expect(hostState.seats.map((seat) => seat.nickname)).toEqual(['Ana', 'Bia']);
+      expect(hostState.seats.every((seat) => seat.connected)).toBe(true);
+
+      // O estado público é idêntico para todo mundo (doc 0002 §1).
+      expect(guestState).toEqual(hostState);
+      expect(guestState.matchId).toBe(hostState.matchId);
+      expect(guestState.roomCode).toBe(hostState.roomCode);
+    },
+    TEST_TIMEOUT_MS,
+  );
+});
+
+describe('S2 — estado autoritativo', () => {
+  it(
+    'aplica a ação válida no servidor e faz os dois clientes convergirem',
+    async () => {
+      const { host, guest, hostAccepted, matchId } = await setupMatch(sdk);
+
+      const before = lastStatePublic(host);
+      expect(before.version).toBe(0);
+
+      // Só o jogador do turno tem ações legais, e elas são as cartas da mão.
+      const hostView = lastStatePrivate(host);
+      expect(hostView.view.legalActions.map((action) => action.cardId)).toEqual([
+        ...hostView.view.hand,
+      ]);
+      expect(lastStatePrivate(guest).view.legalActions).toEqual([]);
+
+      const cardId = at(hostView.view.hand, 0, 'a mão de Ana');
+      playCard(host, matchId, before.version, cardId);
+
+      await awaitStateVersion(host, 1);
+      await awaitStateVersion(guest, 1);
+
+      const hostAfter = lastStatePublic(host);
+      const guestAfter = lastStatePublic(guest);
+
+      // Os dois clientes convergem para o mesmo estado, com a versão incrementada.
+      expect(hostAfter.version).toBe(1);
+      expect(guestAfter.version).toBe(1);
+      expect(guestAfter).toEqual(hostAfter);
+      expect(hostAfter.game.status).toBe('playing');
+      expect(hostAfter.game.table).toEqual([{ playerId: hostAccepted.playerId, cardId }]);
+
+      // A visão privada do dono perde a carta; a do oponente permanece a sua.
+      expect(lastStatePrivate(host).view.hand).not.toContain(cardId);
+      expect(lastStatePrivate(guest).view.hand).toHaveLength(2);
+
+      // O servidor emite o evento da jogada.
+      const events = at(validateMessages(host.messages).events, 0, 'events');
+      expect(events.version).toBe(1);
+      expect(events.events).toContainEqual({
+        type: 'card_played',
+        playerId: hostAccepted.playerId,
+        cardId,
+      });
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'rejeita ação fora do turno com not_your_turn, só para o remetente',
+    async () => {
+      const { host, guest, matchId } = await setupMatch(sdk);
+
+      // Não é o turno de Bia: suas ações legais são vazias.
+      expect(lastStatePrivate(guest).view.legalActions).toEqual([]);
+      const guestCard = at(lastStatePrivate(guest).view.hand, 0, 'a mão de Bia');
+      const hostCard = at(lastStatePrivate(host).view.hand, 0, 'a mão de Ana');
+
+      playCard(guest, matchId, 0, guestCard);
+
+      const error = await awaitError(guest, 'o erro "not_your_turn" para a jogada fora do turno');
+      expect(error.code).toBe('not_your_turn');
+      expect(error.message.length).toBeGreaterThan(0);
+
+      // Barreira de sincronização: o erro só é enviado depois que o servidor
+      // processou (e recusou) a ação, então a jogada válida de Ana é processada
+      // depois dela.
+      playCard(host, matchId, 0, hostCard);
+      await awaitStateVersion(host, 1);
+      await awaitStateVersion(guest, 1);
+
+      // A ação recusada não alterou o estado de nenhum cliente.
+      expect(stateVersions(host)).toEqual([0, 1]);
+      expect(stateVersions(guest)).toEqual([0, 1]);
+      expect(lastStatePublic(host).game.table).toHaveLength(1);
+      expect(lastStatePublic(guest).game.table).toEqual(lastStatePublic(host).game.table);
+
+      // O erro foi só para quem o provocou.
+      expect(guest.messages.error).toHaveLength(1);
+      expect(host.messages.error).toEqual([]);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'rejeita carta que não está na mão do remetente com card_not_in_hand, só para o remetente',
+    async () => {
+      const { host, guest, hostAccepted, matchId } = await setupMatch(sdk);
+
+      // Ana está no turno, mas tenta jogar uma carta de Bia.
+      const guestCard = at(lastStatePrivate(guest).view.hand, 0, 'a mão de Bia');
+      const hostCard = at(lastStatePrivate(host).view.hand, 0, 'a mão de Ana');
+
+      playCard(host, matchId, 0, guestCard);
+
+      const error = await awaitError(host, 'o erro "card_not_in_hand" para a carta alheia');
+      expect(error.code).toBe('card_not_in_hand');
+      expect(error.message.length).toBeGreaterThan(0);
+      // A mensagem de erro é texto de exibição: não ecoa a carta.
+      expect(error.message).not.toContain(guestCard);
+
+      // Barreira de sincronização: a jogada válida de Ana vem depois do erro.
+      playCard(host, matchId, 0, hostCard);
+      await awaitStateVersion(host, 1);
+      await awaitStateVersion(guest, 1);
+
+      // A ação recusada não alterou o estado de nenhum cliente.
+      expect(stateVersions(host)).toEqual([0, 1]);
+      expect(stateVersions(guest)).toEqual([0, 1]);
+      expect(lastStatePublic(host).game.table).toEqual([
+        { playerId: hostAccepted.playerId, cardId: hostCard },
+      ]);
+      expect(lastStatePublic(guest).game.table).toEqual(lastStatePublic(host).game.table);
+
+      // O erro foi só para quem o provocou.
+      expect(host.messages.error).toHaveLength(1);
+      expect(guest.messages.error).toEqual([]);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'rejeita stateVersion desatualizada com stale_state, só para o remetente',
+    async () => {
+      const { host, guest, matchId } = await setupMatch(sdk);
+
+      const firstCard = at(lastStatePrivate(host).view.hand, 0, 'a mão de Ana');
+      const secondCard = at(lastStatePrivate(host).view.hand, 1, 'a mão de Ana');
+
+      // Primeira jogada válida: a versão vai de 0 para 1 e o turno passa para Bia.
+      playCard(host, matchId, 0, firstCard);
+      await awaitStateVersion(host, 1);
+      await awaitStateVersion(guest, 1);
+
+      // Ana reenvia a versão antiga (0), agora desatualizada.
+      playCard(host, matchId, 0, secondCard);
+
+      const error = await awaitError(host, 'o erro "stale_state" para a versão desatualizada');
+      expect(error.code).toBe('stale_state');
+      expect(error.message.length).toBeGreaterThan(0);
+
+      // Barreira de sincronização: agora é o turno de Bia, que joga com a versão 1.
+      const guestCard = at(lastStatePrivate(guest).view.hand, 0, 'a mão de Bia');
+      playCard(guest, matchId, 1, guestCard);
+      await awaitStateVersion(host, 2);
+      await awaitStateVersion(guest, 2);
+
+      // A ação recusada não alterou o estado de nenhum cliente.
+      expect(stateVersions(host)).toEqual([0, 1, 2]);
+      expect(stateVersions(guest)).toEqual([0, 1, 2]);
+      expect(lastStatePublic(host).game.table).toHaveLength(2);
+      expect(lastStatePublic(guest).game.table).toEqual(lastStatePublic(host).game.table);
+
+      // O erro foi só para quem o provocou.
+      expect(host.messages.error).toHaveLength(1);
+      expect(guest.messages.error).toEqual([]);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'rejeita matchId de outra partida com match_not_found, só para o remetente',
+    async () => {
+      const { host, guest, hostAccepted, matchId } = await setupMatch(sdk);
+
+      const cardId = at(lastStatePrivate(host).view.hand, 0, 'a mão de Ana');
+
+      host.room.send('action_intent', {
+        type: 'action_intent',
+        matchId: 'partida-de-outra-sala',
+        stateVersion: 0,
+        action: { type: 'play_card', cardId },
+      });
+
+      const error = await awaitError(host, 'o erro "match_not_found" para o matchId errado');
+      expect(error.code).toBe('match_not_found');
+      expect(error.message.length).toBeGreaterThan(0);
+
+      // Barreira de sincronização: a partida real continua jogável.
+      playCard(host, matchId, 0, cardId);
+      await awaitStateVersion(host, 1);
+      await awaitStateVersion(guest, 1);
+
+      // A ação recusada não alterou o estado de nenhum cliente.
+      expect(stateVersions(host)).toEqual([0, 1]);
+      expect(stateVersions(guest)).toEqual([0, 1]);
+      expect(lastStatePublic(host).game.table).toEqual([
+        { playerId: hostAccepted.playerId, cardId },
+      ]);
+
+      // O erro foi só para quem o provocou.
+      expect(host.messages.error).toHaveLength(1);
+      expect(guest.messages.error).toEqual([]);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'rejeita ação sem cardId com invalid_payload e mantém a conexão viva',
+    async () => {
+      const { host, guest, matchId } = await setupMatch(sdk);
+
+      host.room.send('action_intent', {
+        type: 'action_intent',
+        matchId,
+        stateVersion: 0,
+        action: { type: 'play_card' },
+      });
+
+      const error = await awaitError(host, 'o erro "invalid_payload" para a ação sem cardId');
+      expect(error.code).toBe('invalid_payload');
+      expect(error.message.length).toBeGreaterThan(0);
+
+      // Barreira de sincronização: a conexão continua viva e a jogada é aceita.
+      const cardId = at(lastStatePrivate(host).view.hand, 0, 'a mão de Ana');
+      playCard(host, matchId, 0, cardId);
+      await awaitStateVersion(host, 1);
+      await awaitStateVersion(guest, 1);
+
+      // A ação recusada não alterou o estado de nenhum cliente.
+      expect(stateVersions(host)).toEqual([0, 1]);
+      expect(stateVersions(guest)).toEqual([0, 1]);
+      expect(lastStatePublic(host).game.table).toHaveLength(1);
+
+      // O erro foi só para quem o provocou.
+      expect(host.messages.error).toHaveLength(1);
+      expect(guest.messages.error).toEqual([]);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'rejeita playerId injetado no payload da ação com invalid_payload',
+    async () => {
+      const { host, guest, hostAccepted, guestAccepted, matchId } = await setupMatch(sdk);
+
+      const cardId = at(lastStatePrivate(host).view.hand, 0, 'a mão de Ana');
+
+      // Ana tenta jogar em nome de Bia: o playerId nunca vem do cliente.
+      host.room.send('action_intent', {
+        type: 'action_intent',
+        matchId,
+        stateVersion: 0,
+        action: { type: 'play_card', cardId, playerId: guestAccepted.playerId },
+      });
+
+      const error = await awaitError(host, 'o erro "invalid_payload" para o playerId injetado');
+      expect(error.code).toBe('invalid_payload');
+
+      // Barreira de sincronização: quem jogou foi Ana, resolvido pela sessão.
+      playCard(host, matchId, 0, cardId);
+      await awaitStateVersion(host, 1);
+      await awaitStateVersion(guest, 1);
+
+      expect(lastStatePublic(host).game.table).toEqual([
+        { playerId: hostAccepted.playerId, cardId },
+      ]);
+      expect(lastStatePublic(guest).game.table).toEqual(lastStatePublic(host).game.table);
+
+      // O erro foi só para quem o provocou.
+      expect(host.messages.error).toHaveLength(1);
+      expect(guest.messages.error).toEqual([]);
+    },
+    TEST_TIMEOUT_MS,
+  );
+});
+
+describe('S3 — informação oculta por jogador', () => {
+  it(
+    'entrega a mão só ao dono: nenhum identificador da mão alheia chega ao outro jogador',
+    async () => {
+      const { host, guest, hostAccepted, guestAccepted } = await setupMatch(sdk);
+
+      const hostView = lastStatePrivate(host);
+      const guestView = lastStatePrivate(guest);
+
+      // Cada jogador recebe a visão privada com a própria identidade e a mão.
+      expect(hostView.view.playerId).toBe(hostAccepted.playerId);
+      expect(guestView.view.playerId).toBe(guestAccepted.playerId);
+      expect(hostView.view.hand).toHaveLength(2);
+      expect(guestView.view.hand).toHaveLength(2);
+      // As mãos são distintas e, juntas, cobrem o baralho inteiro.
+      expect(new Set([...hostView.view.hand, ...guestView.view.hand]).size).toBe(4);
+
+      // Varredura estrutural do payload bruto recebido por cada conexão:
+      // nenhum valor de string, em nenhuma profundidade, é uma carta da mão alheia.
+      expect(payloadValuesMatching(host.messages, guestView.view.hand)).toEqual([]);
+      expect(payloadValuesMatching(guest.messages, hostView.view.hand)).toEqual([]);
+
+      // Varredura do JSON bruto de todas as mensagens recebidas por cada conexão.
+      expect(rawJsonMatching(host.messages, guestView.view.hand)).toEqual([]);
+      expect(rawJsonMatching(guest.messages, hostView.view.hand)).toEqual([]);
+
+      // Controle positivo: o dono enxerga a própria mão.
+      expect(new Set(payloadValuesMatching(host.messages, hostView.view.hand))).toEqual(
+        new Set(hostView.view.hand),
+      );
+      expect(new Set(payloadValuesMatching(guest.messages, guestView.view.hand))).toEqual(
+        new Set(guestView.view.hand),
+      );
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'não expõe nenhuma carta no estado público: só o tamanho das mãos e a mesa',
+    async () => {
+      const { host, guest } = await setupMatch(sdk);
+
+      const cardIds = [
+        ...new Set([...lastStatePrivate(host).view.hand, ...lastStatePrivate(guest).view.hand]),
+      ];
+
+      const publicState = lastStatePublic(host);
+      expect(publicState.game.handSizes).toHaveLength(2);
+      expect(publicState.game.handSizes.map((entry) => entry.count)).toEqual([2, 2]);
+      expect(publicState.game.table).toEqual([]);
+
+      // O payload público, sozinho, não carrega nenhum identificador de carta.
+      const publicStrings = stringValues(host.messages.state_public);
+      expect(publicStrings.filter((value) => cardIds.includes(value))).toEqual([]);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'depois de uma jogada, a mão restante de cada um continua invisível para o outro',
+    async () => {
+      const { host, guest, hostAccepted, matchId } = await setupMatch(sdk);
+
+      const played = at(lastStatePrivate(host).view.hand, 0, 'a mão de Ana');
+
+      playCard(host, matchId, 0, played);
+      await awaitStateVersion(host, 1);
+      await awaitStateVersion(guest, 1);
+
+      const hostHandAfter = lastStatePrivate(host).view.hand;
+      const guestHandAfter = lastStatePrivate(guest).view.hand;
+
+      // A carta jogada sai da mão de Ana e vira pública na mesa.
+      expect(hostHandAfter).not.toContain(played);
+      expect(guestHandAfter).not.toContain(played);
+      expect(lastStatePublic(guest).game.table).toEqual([
+        { playerId: hostAccepted.playerId, cardId: played },
+      ]);
+
+      // As cartas que continuam na mão de um não aparecem no payload bruto do outro.
+      expect(payloadValuesMatching(host.messages, guestHandAfter)).toEqual([]);
+      expect(payloadValuesMatching(guest.messages, hostHandAfter)).toEqual([]);
+      expect(rawJsonMatching(host.messages, guestHandAfter)).toEqual([]);
+      expect(rawJsonMatching(guest.messages, hostHandAfter)).toEqual([]);
+    },
+    TEST_TIMEOUT_MS,
+  );
+});
