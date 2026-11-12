@@ -329,3 +329,71 @@
   cursor: not-allowed;
   opacity: 0.55;
 }
+
+/* ------------------------------------------------------------------ *
+ * Animações de início de partida: embaralhar e distribuir
+ * ------------------------------------------------------------------ */
+.cnm-board {
+  position: relative;
+}
+
+/* Durante o embaralhamento e a distribuição, a mesa não aceita toques. */
+.cnm-busy {
+  pointer-events: none;
+}
+
+.cnm-shuffle {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+}
+
+.cnm-shuffle-card {
+  position: absolute;
+  top: 28%;
+  left: calc(50% - var(--cw) * 0.55);
+  width: calc(var(--cw) * 1.1);
+  animation: cnm-riffle 1s ease-in-out both;
+  animation-delay: calc(var(--i) * 30ms);
+}
+
+/* Duas metades se separam, se cruzam em "riffle" e voltam a ser um monte. */
+@keyframes cnm-riffle {
+  0% {
+    transform: translate(0, calc(var(--i) * -2px));
+  }
+  25% {
+    transform: translate(calc(var(--side) * var(--cw) * 0.75), calc(var(--i) * -2px))
+      rotate(calc(var(--side) * -7deg));
+  }
+  50% {
+    transform: translate(calc(var(--side) * var(--cw) * 0.45), calc(var(--i) * -4px))
+      rotate(calc(var(--side) * -3deg));
+  }
+  75% {
+    transform: translate(calc(var(--side) * var(--cw) * 0.12), calc(var(--i) * -3px))
+      rotate(calc(var(--side) * -1deg));
+  }
+  100% {
+    transform: translate(0, calc(var(--i) * -2px));
+  }
+}
+
+/* A carta sai do monte (canto superior esquerdo) e voa até a sua coluna. */
+.cnm-dealt {
+  animation: cnm-deal 280ms cubic-bezier(0.2, 0.7, 0.3, 1) backwards;
+}
+
+@keyframes cnm-deal {
+  from {
+    transform: translate(
+      calc(var(--col) * (var(--cw) + var(--gap)) * -1),
+      calc((var(--cw) * 1.7 + var(--cw) * var(--off)) * -1)
+    );
+    opacity: 0.9;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}

@@ -10,6 +10,7 @@ import {
   type PatienceSuit,
 } from '@cartas-na-mesa/core';
 
+import { isMuted, playSound, preloadSounds, setMuted } from '../ui/sounds';
 import { cardBackUrl, cardFaceUrl, cardName, SUIT_SYMBOL } from '../ui/card-assets';
 
 const PLAYER_ID = 'player-1';
@@ -34,6 +35,20 @@ type DragState = {
   dy: number;
   w: number;
 };
+
+type Phase = 'shuffling' | 'dealing' | 'playing';
+
+/** Ordem real de distribuição do Klondike: fileira por fileira, da esquerda para a direita. */
+const DEAL_ORDER: ReadonlyMap<string, number> = (() => {
+  const order = new Map<string, number>();
+  for (let row = 0; row < 7; row += 1) {
+    for (let col = row; col < 7; col += 1) order.set(`${col}-${row}`, order.size);
+  }
+  return order;
+})();
+const DEAL_TOTAL = DEAL_ORDER.size;
+const SHUFFLE_MS = 1050;
+const DEAL_INTERVAL_MS = 70;
 
 function newGame(): PatienceState {
   const seed = crypto.getRandomValues(new Uint32Array(1))[0] ?? Date.now();
@@ -85,6 +100,10 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
   const [selection, setSelection] = useState<Selection | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
+  const [phase, setPhase] = useState<Phase>('shuffling');
+  const [dealt, setDealt] = useState(0);
+  const [muted, setMutedState] = useState(isMuted);
+  const [round, setRound] = useState(0);
   const suppressClick = useRef(false);
 
   useEffect(() => {
@@ -93,6 +112,34 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
     return () => window.clearTimeout(timer);
   }, [message]);
 
+  // Início da partida: embaralha (1s) e depois distribui uma carta por vez.
+  useEffect(() => {
+    preloadSounds();
+    setPhase('shuffling');
+    setDealt(0);
+    playSound('shuffle');
+
+    let interval: number | undefined;
+    const timer = window.setTimeout(() => {
+      setPhase('dealing');
+      let count = 0;
+      interval = window.setInterval(() => {
+        count += 1;
+        setDealt(count);
+        playSound('draw');
+        if (count >= DEAL_TOTAL) {
+          window.clearInterval(interval);
+          setPhase('playing');
+        }
+      }, DEAL_INTERVAL_MS);
+    }, SHUFFLE_MS);
+
+    return () => {
+      window.clearTimeout(timer);
+      window.clearInterval(interval);
+    };
+  }, [round]);
+
   const run = useCallback(
     (payload: PatienceActionPayload): boolean => {
       const result = patienceGame.applyAction(state, { playerId: PLAYER_ID, payload });
@@ -100,6 +147,7 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
         setMessage(result.error.message);
         return false;
       }
+      playSound(payload.type === 'flip_stock' ? 'draw' : 'move');
       setHistory((h) => [...h, state]);
       setState(result.state);
       setSelection(null);
@@ -184,6 +232,7 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
 
   const restart = () => {
     setState(newGame());
+    setRound((r) => r + 1);
     setHistory([]);
     setSelection(null);
     setMessage(null);
@@ -259,6 +308,17 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
           </p>
         </div>
         <div className="flex gap-2">
+          <button
+            aria-pressed={muted}
+            className="cnm-btn"
+            onClick={() => {
+              setMuted(!muted);
+              setMutedState(!muted);
+            }}
+            type="button"
+          >
+            {muted ? '🔇 Som desligado' : '🔊 Som'}
+          </button>
           <button className="cnm-btn" disabled={history.length === 0} onClick={undo} type="button">
             Desfazer
           </button>
@@ -269,7 +329,22 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
       </div>
 
       <div className="cnm-board-wrap">
-        <div className="cnm-board">
+        <div className={`cnm-board ${phase === 'playing' ? '' : 'cnm-busy'}`}>
+          {phase === 'shuffling' ? (
+            <div aria-hidden="true" className="cnm-shuffle">
+              {Array.from({ length: 10 }, (_, i) => (
+                <span
+                  className="cnm-card cnm-card-back cnm-shuffle-card"
+                  key={i}
+                  style={{
+                    ['--i' as string]: i,
+                    ['--side' as string]: i % 2 === 0 ? -1 : 1,
+                    backgroundImage: `url("${cardBackUrl() ?? ''}")`,
+                  }}
+                />
+              ))}
+            </div>
+          ) : null}
           <div className="cnm-row">
             <button
               aria-label={
@@ -349,6 +424,8 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
                 >
                   {column.length === 0 ? <span className="cnm-slot-hint">K</span> : null}
                   {column.map((card, idx) => {
+                    const order = DEAL_ORDER.get(`${colIdx}-${idx}`) ?? -1;
+                    if (phase !== 'playing' && order >= dealt) return null;
                     const isDown = idx < down;
                     const offset = Math.min(idx, down) * 0.14 + Math.max(idx - down, 0) * 0.32;
                     const isSelected =
@@ -358,7 +435,7 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
                     return (
                       <button
                         aria-label={isDown ? 'Carta virada para baixo' : cardName(card)}
-                        className={`cnm-stacked cnm-draggable ${
+                        className={`cnm-stacked cnm-draggable ${phase === 'dealing' ? 'cnm-dealt' : ''} ${
                           drag?.source.kind === 'tableau' &&
                           drag.source.column === colIdx &&
                           idx >= drag.source.index
@@ -387,7 +464,11 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
                             cardId: card.id,
                           })
                         }
-                        style={{ top: `calc(var(--cw) * ${offset})` }}
+                        style={{
+                          top: `calc(var(--cw) * ${offset})`,
+                          ['--col' as string]: colIdx,
+                          ['--off' as string]: offset,
+                        }}
                         type="button"
                       >
                         {isDown ? <CardBack /> : <CardFace card={card} selected={isSelected} />}

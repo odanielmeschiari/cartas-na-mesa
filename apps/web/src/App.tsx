@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 
+import { playSound } from './ui/sounds';
 import PatienceTable from './components/PatienceTable';
 import { ErrorBanner } from './components/ErrorBanner';
 import { RoomPanel } from './components/RoomPanel';
@@ -96,7 +97,14 @@ export function App() {
         />
 
         {spike.phase === 'in-room' && room !== null ? (
-          <RoomPanel onLeave={spike.leaveRoom} onPlayCard={spike.playCard} room={room} />
+          <RoomPanel
+            onLeave={spike.leaveRoom}
+            onPlayCard={(cardId) => {
+              playSound('move');
+              spike.playCard(cardId);
+            }}
+            room={room}
+          />
         ) : (
           <>
             {spike.phase === 'connecting' ? (
