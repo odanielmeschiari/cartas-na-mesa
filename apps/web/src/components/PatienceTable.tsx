@@ -36,7 +36,19 @@ type DragState = {
   w: number;
 };
 
-type Phase = 'shuffling' | 'dealing' | 'playing';
+type Phase = 'shuffling' | 'moving' | 'dealing' | 'playing';
+
+type Hint = {
+  readonly source: DragSource | { readonly kind: 'stock' } | null;
+  readonly target:
+    | { readonly kind: 'column'; readonly column: number }
+    | { readonly kind: 'foundation'; readonly suit: PatienceSuit }
+    | null;
+  readonly text: string;
+};
+
+/** Sem nenhuma jogada por este tempo, a mesa mostra uma dica. */
+const HINT_DELAY_MS = 3000;
 
 /** Ordem real de distribuição do Klondike: fileira por fileira, da esquerda para a direita. */
 const DEAL_ORDER: ReadonlyMap<string, number> = (() => {
@@ -48,7 +60,97 @@ const DEAL_ORDER: ReadonlyMap<string, number> = (() => {
 })();
 const DEAL_TOTAL = DEAL_ORDER.size;
 const SHUFFLE_MS = 1050;
+const MOVE_MS = 380;
 const DEAL_INTERVAL_MS = 70;
+
+/**
+ * Escolhe uma jogada útil, nesta ordem: a que vira uma carta escondida, a que
+ * vai para a fundação, a que sai do descarte, a que esvazia uma coluna e, por
+ * último, comprar do monte. Mover cartas só de lugar não vira dica.
+ */
+function findHint(state: PatienceState): Hint | null {
+  const actions = patienceGame.legalActions(state, PLAYER_ID);
+  const wasteTop = state.waste[state.waste.length - 1];
+
+  for (const a of actions) {
+    if (a.type !== 'tableau_to_tableau') continue;
+    const from = state.tableau[a.fromColumn] ?? [];
+    const index = from.findIndex((c) => c.id === a.cardId);
+    const card = from[index];
+    if (
+      card !== undefined &&
+      (state.faceDown[a.fromColumn] ?? 0) > 0 &&
+      index === state.faceDown[a.fromColumn]
+    ) {
+      return {
+        source: { kind: 'tableau', column: a.fromColumn, index },
+        target: { kind: 'column', column: a.toColumn },
+        text: `Dica: mova ${cardName(card)} para a coluna ${a.toColumn + 1} e vire uma carta.`,
+      };
+    }
+  }
+
+  for (const a of actions) {
+    if (a.type === 'waste_to_foundation' && wasteTop !== undefined) {
+      return {
+        source: { kind: 'waste' },
+        target: { kind: 'foundation', suit: wasteTop.suit },
+        text: `Dica: leve ${cardName(wasteTop)} para a fundação.`,
+      };
+    }
+    if (a.type === 'tableau_to_foundation') {
+      const column = state.tableau[a.fromColumn] ?? [];
+      const card = column[column.length - 1];
+      if (card !== undefined) {
+        return {
+          source: { kind: 'tableau', column: a.fromColumn, index: column.length - 1 },
+          target: { kind: 'foundation', suit: card.suit },
+          text: `Dica: leve ${cardName(card)} para a fundação.`,
+        };
+      }
+    }
+  }
+
+  for (const a of actions) {
+    if (a.type === 'waste_to_tableau' && wasteTop !== undefined) {
+      return {
+        source: { kind: 'waste' },
+        target: { kind: 'column', column: a.toColumn },
+        text: `Dica: mova ${cardName(wasteTop)} para a coluna ${a.toColumn + 1}.`,
+      };
+    }
+  }
+
+  for (const a of actions) {
+    if (a.type !== 'tableau_to_tableau') continue;
+    const from = state.tableau[a.fromColumn] ?? [];
+    const card = from[0];
+    if (card !== undefined && card.id === a.cardId) {
+      return {
+        source: { kind: 'tableau', column: a.fromColumn, index: 0 },
+        target: { kind: 'column', column: a.toColumn },
+        text: `Dica: mova ${cardName(card)} para a coluna ${a.toColumn + 1} e esvazie a coluna ${a.fromColumn + 1}.`,
+      };
+    }
+  }
+
+  if (actions.some((a) => a.type === 'flip_stock')) {
+    return {
+      source: { kind: 'stock' },
+      target: null,
+      text:
+        state.stock.length > 0
+          ? 'Dica: vire uma carta do monte.'
+          : 'Dica: recicle o descarte no monte.',
+    };
+  }
+
+  return {
+    source: null,
+    target: null,
+    text: 'Sem jogadas disponíveis. Tente desfazer ou começar uma nova partida.',
+  };
+}
 
 function newGame(): PatienceState {
   const seed = crypto.getRandomValues(new Uint32Array(1))[0] ?? Date.now();
@@ -104,6 +206,7 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
   const [dealt, setDealt] = useState(0);
   const [muted, setMutedState] = useState(isMuted);
   const [round, setRound] = useState(0);
+  const [hint, setHint] = useState<Hint | null>(null);
   const suppressClick = useRef(false);
 
   useEffect(() => {
@@ -111,6 +214,23 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
     const timer = window.setTimeout(() => setMessage(null), 2200);
     return () => window.clearTimeout(timer);
   }, [message]);
+
+  // A mesa ocupa a janela inteira: nada de rolagem da página por trás.
+  useEffect(() => {
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previous;
+    };
+  }, []);
+
+  // Dica: depois de HINT_DELAY_MS sem jogar, destaca uma jogada útil.
+  useEffect(() => {
+    setHint(null);
+    if (phase !== 'playing' || drag !== null || state.status === 'finished') return;
+    const timer = window.setTimeout(() => setHint(findHint(state)), HINT_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [state, phase, drag, selection]);
 
   // Início da partida: embaralha (1s) e depois distribui uma carta por vez.
   useEffect(() => {
@@ -120,22 +240,28 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
     playSound('shuffle');
 
     let interval: number | undefined;
+    let moveTimer: number | undefined;
+    // 1) embaralha no centro; 2) o monte vai até o seu lugar; 3) distribui.
     const timer = window.setTimeout(() => {
-      setPhase('dealing');
-      let count = 0;
-      interval = window.setInterval(() => {
-        count += 1;
-        setDealt(count);
-        playSound('draw');
-        if (count >= DEAL_TOTAL) {
-          window.clearInterval(interval);
-          setPhase('playing');
-        }
-      }, DEAL_INTERVAL_MS);
+      setPhase('moving');
+      moveTimer = window.setTimeout(() => {
+        setPhase('dealing');
+        let count = 0;
+        interval = window.setInterval(() => {
+          count += 1;
+          setDealt(count);
+          playSound('draw');
+          if (count >= DEAL_TOTAL) {
+            window.clearInterval(interval);
+            setPhase('playing');
+          }
+        }, DEAL_INTERVAL_MS);
+      }, MOVE_MS);
     }, SHUFFLE_MS);
 
     return () => {
       window.clearTimeout(timer);
+      window.clearTimeout(moveTimer);
       window.clearInterval(interval);
     };
   }, [round]);
@@ -295,6 +421,12 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
   const wasteTop = state.waste[state.waste.length - 1];
   const inFoundations = state.foundations.reduce((sum, pile) => sum + pile.length, 0);
   const won = state.status === 'finished';
+  // Altura necessária (em larguras de carta): a carta encolhe só o bastante para tudo caber sem rolagem.
+  const rows = Math.max(
+    6,
+    1.85 +
+      Math.max(...state.tableau.map((col, i) => columnHeight(col.length, state.faceDown[i] ?? 0))),
+  );
 
   return (
     <section aria-label="Mesa de Paciência" className="cnm-felt cnm-fullscreen">
@@ -329,7 +461,10 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
       </div>
 
       <div className="cnm-board-wrap">
-        <div className={`cnm-board ${phase === 'playing' ? '' : 'cnm-busy'}`}>
+        <div
+          className={`cnm-board ${phase === 'playing' ? '' : 'cnm-busy'}`}
+          style={{ ['--rows' as string]: rows }}
+        >
           {phase === 'shuffling' ? (
             <div aria-hidden="true" className="cnm-shuffle">
               {Array.from({ length: 10 }, (_, i) => (
@@ -345,6 +480,13 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
               ))}
             </div>
           ) : null}
+          {phase === 'moving' ? (
+            <span
+              aria-hidden="true"
+              className="cnm-card cnm-card-back cnm-shuffle-fly"
+              style={{ backgroundImage: `url("${cardBackUrl() ?? ''}")` }}
+            />
+          ) : null}
           <div className="cnm-row">
             <button
               aria-label={
@@ -352,18 +494,22 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
                   ? `Virar carta do monte (${state.stock.length} restantes)`
                   : 'Reciclar o descarte no monte'
               }
-              className="cnm-slot"
+              className={`cnm-slot ${hint?.source?.kind === 'stock' ? 'cnm-hint' : ''}`}
               onClick={() => run({ type: 'flip_stock' })}
               type="button"
             >
-              {state.stock.length > 0 ? <CardBack /> : <span className="cnm-slot-hint">↻</span>}
+              {phase === 'shuffling' || phase === 'moving' ? null : state.stock.length > 0 ? (
+                <CardBack />
+              ) : (
+                <span className="cnm-slot-hint">↻</span>
+              )}
             </button>
 
             <button
               aria-label={
                 wasteTop === undefined ? 'Descarte vazio' : `Descarte: ${cardName(wasteTop)}`
               }
-              className={`cnm-slot cnm-draggable ${drag?.source.kind === 'waste' ? 'cnm-hidden' : ''}`}
+              className={`cnm-slot cnm-draggable ${drag?.source.kind === 'waste' ? 'cnm-hidden' : ''} ${hint?.source?.kind === 'waste' ? 'cnm-hint' : ''}`}
               disabled={wasteTop === undefined}
               onClick={() =>
                 !suppressClick.current &&
@@ -388,7 +534,7 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
               return (
                 <button
                   aria-label={`Fundação de ${suit}: ${pile.length} carta(s)`}
-                  className={`cnm-slot cnm-draggable ${drag?.source.kind === 'foundation' && drag.source.suit === suit ? 'cnm-hidden' : ''}`}
+                  className={`cnm-slot cnm-draggable ${drag?.source.kind === 'foundation' && drag.source.suit === suit ? 'cnm-hidden' : ''} ${hint?.target?.kind === 'foundation' && hint.target.suit === suit ? 'cnm-hint-target' : ''}`}
                   data-drop="found"
                   key={suit}
                   onClick={() => onFoundationClick(suit)}
@@ -416,7 +562,7 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
               const top = column[column.length - 1] ?? null;
               return (
                 <div
-                  className="cnm-column"
+                  className={`cnm-column ${hint?.target?.kind === 'column' && hint.target.column === colIdx ? 'cnm-hint-target' : ''}`}
                   data-drop={`col-${colIdx}`}
                   key={colIdx}
                   onClick={() => column.length === 0 && onTableauClick(colIdx, null)}
@@ -436,6 +582,12 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
                       <button
                         aria-label={isDown ? 'Carta virada para baixo' : cardName(card)}
                         className={`cnm-stacked cnm-draggable ${phase === 'dealing' ? 'cnm-dealt' : ''} ${
+                          hint?.source?.kind === 'tableau' &&
+                          hint.source.column === colIdx &&
+                          idx >= hint.source.index
+                            ? 'cnm-hint'
+                            : ''
+                        } ${
                           drag?.source.kind === 'tableau' &&
                           drag.source.column === colIdx &&
                           idx >= drag.source.index
@@ -483,7 +635,7 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
       </div>
 
       <p aria-live="polite" className="mt-2 min-h-6 text-sm text-amber-200" role="status">
-        {message}
+        {message ?? hint?.text ?? null}
       </p>
 
       {drag === null ? null : (

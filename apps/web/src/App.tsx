@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 
-import { playSound } from './ui/sounds';
+import { playSound, preloadSounds } from './ui/sounds';
 import PatienceTable from './components/PatienceTable';
 import { ErrorBanner } from './components/ErrorBanner';
 import { RoomPanel } from './components/RoomPanel';
@@ -27,6 +27,11 @@ export function App() {
   const [roomCodeInput, setRoomCodeInput] = useState('');
   const [nicknameError, setNicknameError] = useState<string | null>(null);
   const [roomCodeError, setRoomCodeError] = useState<string | null>(null);
+
+  // Decodifica os sons já na tela inicial, para a primeira jogada não atrasar.
+  useEffect(() => {
+    preloadSounds();
+  }, []);
 
   // O apelido lembrado no navegador preenche o campo na primeira visita.
   useEffect(() => {
