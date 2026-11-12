@@ -1,20 +1,31 @@
-import { Server, WebSocketTransport } from 'colyseus';
-import { createServer } from 'http';
+import { createServer } from 'node:http';
+import { Server, WebSocketTransport, type Room } from 'colyseus';
+
 import { FixtureRoom } from './rooms/fixture';
 
-const port = Number(process.env.PORT) || 3001;
+/** Classe de sala registrada no matchmaking. */
+export type RoomClass = new () => Room;
 
-const httpServer = createServer();
-const transport = new WebSocketTransport({ server: httpServer });
+export interface GameServerOptions {
+  /** Tipos de sala registrados, por nome. Padrão: { fixture: FixtureRoom }. */
+  roomTypes?: Record<string, RoomClass>;
+}
 
-const colyseusServer = new Server({
-  transport,
-});
+/**
+ * Cria o servidor Colyseus com o transporte WebSocket e os tipos de sala.
+ *
+ * A fábrica não faz `listen`: quem decide a porta é quem chama, de modo que
+ * produção e teste usem exatamente o mesmo caminho de código.
+ */
+export function createGameServer(options: GameServerOptions = {}): Server {
+  const httpServer = createServer();
+  const transport = new WebSocketTransport({ server: httpServer });
+  const server = new Server({ transport });
 
-colyseusServer.define('fixture', FixtureRoom);
+  const roomTypes = options.roomTypes ?? { fixture: FixtureRoom };
+  for (const [name, roomClass] of Object.entries(roomTypes)) {
+    server.define(name, roomClass);
+  }
 
-httpServer.listen(port, () => {
-  console.log(`Cartas na Mesa — servidor Colyseus ouvindo na porta ${port}`);
-});
-
-export { colyseusServer };
+  return server;
+}

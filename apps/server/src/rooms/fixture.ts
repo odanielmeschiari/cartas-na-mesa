@@ -1,250 +1,518 @@
-import { Room, type Client } from 'colyseus';
-import { fixtureGame, createSeededRng, type PlayerSeed } from '@cartas-na-mesa/core';
+import { matchMaker, Room, type Client } from 'colyseus';
+import {
+  createSeededRng,
+  fixtureGame,
+  type FixtureEvent,
+  type PlayerSeed,
+} from '@cartas-na-mesa/core';
 import {
   actionIntentMessageSchema,
-  joinAcceptedMessageSchema,
-  roomWaitingMessageSchema,
-  statePublicMessageSchema,
-  statePrivateMessageSchema,
-  eventsMessageSchema,
+  createRoomMessageSchema,
   errorMessageSchema,
+  eventsMessageSchema,
+  joinAcceptedMessageSchema,
+  joinRoomMessageSchema,
+  reconnectMessageSchema,
+  roomWaitingMessageSchema,
+  statePrivateMessageSchema,
+  statePublicMessageSchema,
+  type ErrorCode,
   type SeatInfo,
 } from '@cartas-na-mesa/protocol';
 
+import { randomRoomCode, randomSessionToken, randomUint32 } from './random';
+
+/**
+ * Tentativas para conseguir um código de sala livre. Uma colisão faria o
+ * Colyseus descartar a sala nova e devolver a sala existente, conectando o
+ * cliente à sala alheia (risco b do doc 0002).
+ */
+const MAX_ROOM_CODE_ATTEMPTS = 5;
+
+/**
+ * Texto fixo dos erros da infraestrutura: seguro para exibição, sem eco do
+ * payload do cliente e sem detalhe interno. Os erros do motor trazem a própria
+ * mensagem, que também é texto de exibição.
+ */
+const ERROR_MESSAGES = {
+  invalid_payload: 'Mensagem inválida.',
+  room_not_found: 'Sala não encontrada.',
+  room_full: 'A sala está cheia.',
+  session_invalid: 'Sessão inválida.',
+  match_not_found: 'Partida não encontrada.',
+  stale_state: 'O estado da partida mudou. Receba o estado atual e tente de novo.',
+  game_finished: 'A partida não está em andamento.',
+  internal: 'Erro interno do servidor.',
+} as const;
+
+type InfraErrorCode = keyof typeof ERROR_MESSAGES;
+
+/** Sessão de jogo: identidade do jogador, assento e vínculo com a conexão. */
 interface PlayerSession {
   playerId: string;
   seatIndex: number;
   nickname: string;
   avatarId: string | null;
   sessionToken: string;
+  /** null = desconectado; o assento continua reservado para a reconexão. */
+  clientSessionId: string | null;
 }
 
 type FixtureState = ReturnType<typeof fixtureGame.createInitialState>;
 
+/**
+ * Sala do jogo-fixture do spike.
+ *
+ * Contrato de rede: docs/architecture/0001-fixture-contract.md §5.
+ * Mecanismo de tempo real: docs/architecture/0002-spike-mecanismo-tempo-real.md.
+ */
 export class FixtureRoom extends Room {
+  /**
+   * Limite de conexões do Colyseus (inclui reservas pendentes e reconexões).
+   * É distinto do número de assentos de jogo: os dois protegem coisas
+   * diferentes (risco c do doc 0002).
+   */
   override maxClients = 2;
+
+  /**
+   * A sala sobrevive a uma queda para permitir a reconexão. Com
+   * `autoDispose = true` a sala morreria no primeiro jogador ausente, levando a
+   * partida junto; o descarte é explícito (ver `disposeIfFinished`).
+   */
   override autoDispose = false;
 
-  private roomCode: string;
-  private matchId: string;
-  private players = new Map<string, PlayerSession>();
-  private gameState: FixtureState | null = null;
+  private roomCode!: string;
+  private matchId!: string;
   private version = 0;
+  private gameState: FixtureState | null = null;
 
-  constructor() {
-    super();
-    this.roomCode = this.generateRoomCode();
+  /** Sessão de jogo por `sessionToken`, incluindo jogadores desconectados. */
+  private readonly sessionsByToken = new Map<string, PlayerSession>();
+
+  /** Sessão de jogo por `sessionId` da conexão Colyseus. */
+  private readonly sessionByClient = new Map<string, PlayerSession>();
+
+  override async onCreate(): Promise<void> {
+    this.roomCode = await this.generateRoomCode();
+
+    // O código curto é o roomId do Colyseus: é o identificador que o
+    // matchmaking devolve e que o cliente usa para entrar (doc 0002 §1).
+    this.roomId = this.roomCode;
+
     this.matchId = crypto.randomUUID();
 
-    this.onMessage('action_intent', (client, data) => this.handleAction(client, data));
+    // O setter de metadata só aceita escrita dentro de onCreate; prepara a
+    // futura listagem de salas públicas (decisão adiada no doc 0002 §8).
+    this.metadata = { roomCode: this.roomCode };
+
+    this.registerMessageHandlers();
   }
 
-  private generateRoomCode(): string {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    let result = '';
-    for (let i = 0; i < 6; i += 1) {
-      result += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return result;
+  /**
+   * `onJoin` não senta ninguém: o assento de jogo é atribuído quando chega a
+   * mensagem de identidade (`create_room` / `join_room` / `reconnect`). Na
+   * reconexão o `onJoin` roda de novo, com outro `sessionId`; sentar aqui
+   * duplicaria o assento.
+   */
+  override onJoin(): void {
+    // intencionalmente vazio
   }
 
-  private getPlayerSession(sessionId: string): PlayerSession | undefined {
-    return this.players.get(sessionId);
-  }
-
-  private getSeatInfos(): SeatInfo[] {
-    const seats: SeatInfo[] = [];
-    for (const [, session] of this.players) {
-      seats.push({
-        playerId: session.playerId,
-        seatIndex: session.seatIndex,
-        nickname: session.nickname,
-        avatarId: session.avatarId,
-        connected: true,
-      });
-    }
-    return seats.sort((a, b) => a.seatIndex - b.seatIndex);
-  }
-
-  override onJoin(client: Client, options: Record<string, unknown> = {}) {
-    const seatIndex = this.players.size;
-
-    if (seatIndex >= this.maxClients) {
-      client.close(1008, 'room_full');
+  override async onLeave(client: Client): Promise<void> {
+    const session = this.sessionByClient.get(client.sessionId);
+    if (session === undefined) {
       return;
     }
 
-    const playerId = crypto.randomUUID();
-    const sessionToken = crypto.randomUUID();
-    const nickname =
-      typeof options.nickname === 'string'
-        ? options.nickname.trim().slice(0, 24)
-        : `Jogador ${seatIndex + 1}`;
-    const avatarId = typeof options.avatarId === 'string' ? options.avatarId : null;
+    this.sessionByClient.delete(client.sessionId);
 
-    this.players.set(client.sessionId, {
-      playerId,
-      seatIndex,
-      nickname,
-      avatarId,
-      sessionToken,
-    });
+    // Só desliga a sessão desta conexão se ela ainda estiver ligada a ela: na
+    // reconexão, a saída atrasada da conexão antiga não pode apagar a nova.
+    if (session.clientSessionId === client.sessionId) {
+      session.clientSessionId = null;
+    }
 
-    client.send(
-      'join_accepted',
-      joinAcceptedMessageSchema.parse({
-        type: 'join_accepted',
-        roomCode: this.roomCode,
-        matchId: this.matchId,
-        playerId,
-        seatIndex,
-        sessionToken,
-      }),
+    // O assento de jogo é preservado para a reconexão; `connected` vira false.
+    this.publishState();
+
+    await this.disposeIfFinished();
+  }
+
+  /**
+   * Seed da partida. Produção: CSPRNG. O teste sobrescreve este método.
+   *
+   * A seed não vem das opções do matchmaking: em produção elas são inteiramente
+   * controladas pelo cliente, e a seed precisa ser aleatória e por partida.
+   */
+  protected createMatchSeed(): number {
+    return randomUint32();
+  }
+
+  private registerMessageHandlers(): void {
+    this.onMessage('create_room', (client: Client, message: unknown) =>
+      this.handleCreateRoom(client, message),
+    );
+    this.onMessage('join_room', (client: Client, message: unknown) =>
+      this.handleJoinRoom(client, message),
+    );
+    this.onMessage('reconnect', (client: Client, message: unknown) =>
+      this.handleReconnect(client, message),
+    );
+    this.onMessage('action_intent', (client: Client, message: unknown) =>
+      this.handleActionIntent(client, message),
     );
 
-    if (this.players.size === this.maxClients) {
-      this.startGame();
-    } else {
-      client.send(
-        'room_waiting',
-        roomWaitingMessageSchema.parse({
-          type: 'room_waiting',
-          roomCode: this.roomCode,
-          seats: this.getSeatInfos(),
-        }),
-      );
-    }
-
-    console.log(`[${this.roomId}] jogador entrou: seat=${seatIndex}, playerId=${playerId}`);
+    // Curinga: tipo desconhecido. O Colyseus chama este handler com
+    // (client, type, payload); sem ele, a conexão seria encerrada em produção
+    // (risco h do doc 0002). O tipo e o payload não são usados de propósito: a
+    // resposta é fixa e não ecoa nada que veio do cliente.
+    this.onMessage('*', (client: Client) => {
+      this.sendInfraError(client, 'invalid_payload');
+    });
   }
 
-  override onLeave(client: Client) {
-    const session = this.getPlayerSession(client.sessionId);
-    if (session) {
-      console.log(
-        `[${this.roomId}] jogador saiu: seat=${session.seatIndex}, playerId=${session.playerId}`,
-      );
-      this.players.delete(client.sessionId);
-    }
-  }
-
-  private startGame() {
-    const players: PlayerSeed[] = [];
-    for (const [, session] of this.players) {
-      players.push({
-        playerId: session.playerId,
-        seatIndex: session.seatIndex,
-        nickname: session.nickname,
-        avatarId: session.avatarId,
-      });
+  private handleCreateRoom(client: Client, payload: unknown): void {
+    const parsed = createRoomMessageSchema.safeParse(payload);
+    if (!parsed.success) {
+      this.sendInfraError(client, 'invalid_payload');
+      return;
     }
 
-    this.gameState = fixtureGame.createInitialState(players, createSeededRng(42));
-    this.version = 0;
+    if (this.sessionByClient.has(client.sessionId)) {
+      // Identidade já informada nesta conexão: sentar de novo criaria um
+      // segundo assento para a mesma pessoa.
+      this.sendInfraError(client, 'invalid_payload');
+      return;
+    }
 
-    this.broadcastState();
+    this.seatPlayer(client, parsed.data.nickname, parsed.data.avatarId);
   }
 
-  private broadcastState() {
+  private handleJoinRoom(client: Client, payload: unknown): void {
+    const parsed = joinRoomMessageSchema.safeParse(payload);
+    if (!parsed.success) {
+      this.sendInfraError(client, 'invalid_payload');
+      return;
+    }
+
+    if (parsed.data.roomCode !== this.roomCode) {
+      this.sendInfraError(client, 'room_not_found');
+      return;
+    }
+
+    if (this.sessionByClient.has(client.sessionId)) {
+      this.sendInfraError(client, 'invalid_payload');
+      return;
+    }
+
+    this.seatPlayer(client, parsed.data.nickname, parsed.data.avatarId);
+  }
+
+  private handleReconnect(client: Client, payload: unknown): void {
+    const parsed = reconnectMessageSchema.safeParse(payload);
+    if (!parsed.success) {
+      this.sendInfraError(client, 'invalid_payload');
+      return;
+    }
+
+    if (parsed.data.roomCode !== this.roomCode) {
+      this.sendInfraError(client, 'room_not_found');
+      return;
+    }
+
+    const session = this.sessionsByToken.get(parsed.data.sessionToken);
+    if (session === undefined) {
+      this.sendInfraError(client, 'session_invalid');
+      return;
+    }
+
+    const previousClientSessionId = session.clientSessionId;
+    if (previousClientSessionId !== null && previousClientSessionId !== client.sessionId) {
+      // A conexão antiga ainda ocupa a sessão: encerra-a para que a nova
+      // assuma o assento. `leave` é o successor de `close`, que está
+      // depreciado e emite aviso de depreciação a cada uso.
+      this.clients.get(previousClientSessionId)?.leave(4000, 'session_replaced');
+    }
+
+    session.clientSessionId = client.sessionId;
+    this.sessionByClient.set(client.sessionId, session);
+
+    this.sendJoinAccepted(client, session);
+    this.publishState();
+  }
+
+  private handleActionIntent(client: Client, payload: unknown): void {
+    // Ordem de conferência (doc 0002 §5.2): sessão do emissor, envelope,
+    // partida, versão, partida em andamento e, por fim, o motor.
+    const session = this.sessionByClient.get(client.sessionId);
+    if (session === undefined) {
+      this.sendInfraError(client, 'session_invalid');
+      return;
+    }
+
+    const parsed = actionIntentMessageSchema.safeParse(payload);
+    if (!parsed.success) {
+      this.sendInfraError(client, 'invalid_payload');
+      return;
+    }
+
+    if (parsed.data.matchId !== this.matchId) {
+      this.sendInfraError(client, 'match_not_found');
+      return;
+    }
+
+    if (parsed.data.stateVersion !== this.version) {
+      this.sendInfraError(client, 'stale_state');
+      return;
+    }
+
     const gameState = this.gameState;
-    if (!gameState) return;
-
-    const publicView = fixtureGame.publicView(gameState);
-    const seats = this.getSeatInfos();
-
-    // Estado público idêntico para todos (sem mãos)
-    this.broadcast(
-      'state_public',
-      statePublicMessageSchema.parse({
-        type: 'state_public',
-        matchId: this.matchId,
-        roomCode: this.roomCode,
-        version: this.version,
-        seats,
-        game: publicView,
-      }),
-    );
-
-    // Visão privada: apenas a mão do próprio cliente
-    this.clients.forEach((client) => {
-      const session = this.getPlayerSession(client.sessionId);
-      if (!session) return;
-
-      const privateView = fixtureGame.viewFor(gameState, session.playerId);
-
-      client.send(
-        'state_private',
-        statePrivateMessageSchema.parse({
-          type: 'state_private',
-          matchId: this.matchId,
-          version: this.version,
-          view: privateView,
-        }),
-      );
-    });
-  }
-
-  private handleAction(client: Client, data: unknown) {
-    const session = this.getPlayerSession(client.sessionId);
-    if (!session) {
-      client.send(
-        'error',
-        errorMessageSchema.parse({
-          type: 'error',
-          code: 'session_invalid',
-          message: 'Sessão inválida.',
-        }),
-      );
+    if (gameState === null) {
+      this.sendInfraError(client, 'game_finished');
       return;
     }
 
-    // Valida o envelope da intenção de ação com Zod. playerId NÃO vem do cliente.
-    const validated = actionIntentMessageSchema.parse(data);
-
-    if (!this.gameState) {
-      client.send(
-        'error',
-        errorMessageSchema.parse({
-          type: 'error',
-          code: 'game_finished',
-          message: 'Partida não iniciada.',
-        }),
-      );
-      return;
-    }
-
-    const result = fixtureGame.applyAction(this.gameState, {
+    // O playerId vem da sessão, nunca do cliente.
+    const result = fixtureGame.applyAction(gameState, {
       playerId: session.playerId,
-      payload: validated.action,
+      payload: parsed.data.action,
     });
 
     if (!result.ok) {
-      client.send(
-        'error',
-        errorMessageSchema.parse({
-          type: 'error',
-          code: result.error.code,
-          message: result.error.message,
-        }),
-      );
+      // Erros do motor passam sem tradução; invalid_setup vira internal.
+      const code: ErrorCode =
+        result.error.code === 'invalid_setup' ? 'internal' : result.error.code;
+      this.sendError(client, code, result.error.message);
       return;
     }
 
     this.gameState = result.state;
     this.version += 1;
 
-    // Eventos públicos para todos
-    this.broadcast(
-      'events',
-      eventsMessageSchema.parse({
-        type: 'events',
+    this.publishEvents(result.events);
+    this.publishState();
+  }
+
+  /**
+   * Senta o jogador no primeiro assento livre. Assentos de jogadores
+   * desconectados continuam tomados: o assento é preservado para a reconexão.
+   */
+  private seatPlayer(client: Client, nickname: string, avatarId: string | null): void {
+    const seatIndex = this.findFreeSeat();
+    if (seatIndex === null) {
+      this.sendInfraError(client, 'room_full');
+      return;
+    }
+
+    const session: PlayerSession = {
+      playerId: crypto.randomUUID(),
+      seatIndex,
+      nickname,
+      avatarId,
+      sessionToken: randomSessionToken(),
+      clientSessionId: client.sessionId,
+    };
+
+    // A partida nasce com o segundo assento. Criar o estado antes de registrar
+    // a sessão evita deixar o jogador sentado numa sala sem partida quando o
+    // setup é recusado pelo motor (defesa em profundidade, contrato §3).
+    if (this.gameState === null && this.sessionsByToken.size + 1 === fixtureGame.playerCount.max) {
+      try {
+        this.startMatch([...this.sessionsByToken.values(), session]);
+      } catch (error) {
+        console.error(`[${this.roomCode}] falha ao iniciar a partida:`, error);
+        this.sendError(client, 'internal', ERROR_MESSAGES.internal);
+        return;
+      }
+    }
+
+    this.sessionsByToken.set(session.sessionToken, session);
+    this.sessionByClient.set(client.sessionId, session);
+
+    this.sendJoinAccepted(client, session);
+    this.publishState();
+  }
+
+  private startMatch(sessions: readonly PlayerSession[]): void {
+    const players: PlayerSeed[] = [...sessions]
+      .sort((left, right) => left.seatIndex - right.seatIndex)
+      .map((session) => ({
+        playerId: session.playerId,
+        seatIndex: session.seatIndex,
+        nickname: session.nickname,
+        avatarId: session.avatarId,
+      }));
+
+    this.gameState = fixtureGame.createInitialState(
+      players,
+      createSeededRng(this.createMatchSeed()),
+    );
+    this.version = 0;
+  }
+
+  private findFreeSeat(): number | null {
+    const taken = new Set<number>();
+    for (const session of this.sessionsByToken.values()) {
+      taken.add(session.seatIndex);
+    }
+
+    for (let seatIndex = 0; seatIndex < fixtureGame.playerCount.max; seatIndex += 1) {
+      if (!taken.has(seatIndex)) {
+        return seatIndex;
+      }
+    }
+
+    return null;
+  }
+
+  /** Assentos em ordem de assento, com a presença derivada da sessão. */
+  private seatInfos(): SeatInfo[] {
+    return [...this.sessionsByToken.values()]
+      .sort((left, right) => left.seatIndex - right.seatIndex)
+      .map((session) => ({
+        playerId: session.playerId,
+        seatIndex: session.seatIndex,
+        nickname: session.nickname,
+        avatarId: session.avatarId,
+        connected: session.clientSessionId !== null,
+      }));
+  }
+
+  /** Jogadores sentados cuja conexão ainda está na sala. */
+  private *seatedClients(): Generator<{ session: PlayerSession; client: Client }> {
+    for (const session of this.sessionsByToken.values()) {
+      if (session.clientSessionId === null) {
+        continue;
+      }
+      const client = this.clients.get(session.clientSessionId);
+      if (client === undefined) {
+        continue;
+      }
+      yield { session, client };
+    }
+  }
+
+  /**
+   * Publica presença e estado. O estado público é idêntico para todos; a visão
+   * privada vai só para o dono, por conexão. Conexões sem sessão de jogo
+   * sentada não recebem nada.
+   */
+  private publishState(): void {
+    const seats = this.seatInfos();
+
+    if (this.gameState === null) {
+      const waiting = roomWaitingMessageSchema.parse({
+        type: 'room_waiting',
+        roomCode: this.roomCode,
+        seats,
+      });
+      for (const { client } of this.seatedClients()) {
+        client.send('room_waiting', waiting);
+      }
+      return;
+    }
+
+    const gameState = this.gameState;
+    const publicMessage = statePublicMessageSchema.parse({
+      type: 'state_public',
+      matchId: this.matchId,
+      roomCode: this.roomCode,
+      version: this.version,
+      seats,
+      game: fixtureGame.publicView(gameState),
+    });
+
+    for (const { session, client } of this.seatedClients()) {
+      client.send('state_public', publicMessage);
+      client.send(
+        'state_private',
+        statePrivateMessageSchema.parse({
+          type: 'state_private',
+          matchId: this.matchId,
+          version: this.version,
+          view: fixtureGame.viewFor(gameState, session.playerId),
+        }),
+      );
+    }
+  }
+
+  private publishEvents(events: readonly FixtureEvent[]): void {
+    const message = eventsMessageSchema.parse({
+      type: 'events',
+      matchId: this.matchId,
+      version: this.version,
+      events,
+    });
+
+    for (const { client } of this.seatedClients()) {
+      client.send('events', message);
+    }
+  }
+
+  private sendJoinAccepted(client: Client, session: PlayerSession): void {
+    // O sessionToken sai apenas aqui, para o dono da sessão.
+    client.send(
+      'join_accepted',
+      joinAcceptedMessageSchema.parse({
+        type: 'join_accepted',
+        roomCode: this.roomCode,
         matchId: this.matchId,
-        version: this.version,
-        events: result.events,
+        playerId: session.playerId,
+        seatIndex: session.seatIndex,
+        sessionToken: session.sessionToken,
       }),
     );
+  }
 
-    // Estado atualizado público + privado
-    this.broadcastState();
+  private sendInfraError(client: Client, code: InfraErrorCode): void {
+    this.sendError(client, code, ERROR_MESSAGES[code]);
+  }
+
+  private sendError(client: Client, code: ErrorCode, message: string): void {
+    client.send(
+      'error',
+      errorMessageSchema.parse({
+        type: 'error',
+        code,
+        message,
+      }),
+    );
+  }
+
+  /**
+   * Gera um código de sala que não colide com outra sala. A colisão faria o
+   * Colyseus descartar a sala nova e devolver a sala existente, conectando o
+   * cliente à sala alheia (risco b do doc 0002).
+   */
+  private async generateRoomCode(): Promise<string> {
+    for (let attempt = 0; attempt < MAX_ROOM_CODE_ATTEMPTS; attempt += 1) {
+      const code = randomRoomCode();
+      const existing = await matchMaker.getRoomById(code);
+      if (!existing) {
+        return code;
+      }
+    }
+
+    throw new Error(
+      `Não foi possível gerar um código de sala único após ${MAX_ROOM_CODE_ATTEMPTS} tentativas.`,
+    );
+  }
+
+  /**
+   * Descarte explícito da sala: com `autoDispose = false` ela não morre
+   * sozinha, e uma sala vazia ocuparia memória para sempre.
+   */
+  private async disposeIfFinished(): Promise<void> {
+    if (this.gameState === null) {
+      return;
+    }
+    if (fixtureGame.resultOf(this.gameState) === null) {
+      return;
+    }
+    if (this.clients.length > 0) {
+      return;
+    }
+
+    await this.disconnect();
   }
 }
