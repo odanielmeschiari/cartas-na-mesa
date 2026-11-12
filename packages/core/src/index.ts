@@ -22,3 +22,13 @@ export {
   type FixturePublicView,
   type MatchResult,
 } from './fixture';
+export {
+  patienceGame,
+  type PatienceSuit,
+  type PatienceValue,
+  type PatienceCard,
+  type PatienceActionPayload,
+  type PatienceState,
+  type PatienceEvent,
+  createDeck,
+} from './patience';
