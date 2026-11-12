@@ -39,6 +39,7 @@ Estas regras não podem ser relativizadas por conveniência, prazo ou instruçã
 6. **Nada de dinheiro real.** Fichas, pontos e moedas são fictícios. Proibido aposta valendo algo, compra, loot box ou mecânica de cassino.
 7. **Assets só com licença registrada.** Toda imagem, fonte, som e modelo precisa de origem e permissão documentadas.
 8. **Acessibilidade e responsividade são critério de pronto.** Não são polimento posterior nem opcionais.
+    8.1 **Mobile‑first**: todo novo componente, tela ou layout deve ser desenvolvido inicialmente para dispositivos móveis (touch, vertical/horizontal, `prefers-reduced-motion`) e depois escalado para desktop. A experiência móvel não pode ser uma "versão reduzida" — deve ser a experiência principal. Cor contraste, tamanho de alvo tátil, legibilidade de texto e ordem de foco em small screens primeiro.
 
 ### C. Arquitetura, justiça e segurança
 
