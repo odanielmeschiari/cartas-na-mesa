@@ -50,7 +50,7 @@ Estas regras não podem ser relativizadas por conveniência, prazo ou instruçã
 ### D. Qualidade e integridade
 
 13. **Nunca contornar verificações.** Proibido desabilitar, pular ou afrouxar teste, lint, typecheck ou revisão para "fazer passar".
-14. **Nada irreversível sem autorização.** Commit, push, dependência nova, migração destrutiva ou segredo exigem pedido explícito do usuário.
+14. **Autorização antecipada para commit, push e comandos.** O dono do projeto autorizou, em 2026-11-12, criar commits, fazer push e executar comandos de terminal (inclusive instalar dependência estritamente necessária) sem pedir permissão a cada ocorrência, desde que sejam **estritamente necessários para prosseguir trabalhando no projeto**. Continuam exigindo pedido explícito do usuário as operações destrutivas ou irreversíveis fora desse escopo: `push --force` ou reescrita de histórico em `main`, `reset --hard`, descarte de commits, exclusão de branches ou tags, publicação de pacotes, criação de segredo, migração destrutiva e alterações de ambiente que não sejam estritamente necessárias ao trabalho em andamento.
 15. **Entrada externa é hostil.** Validar na borda e novamente no servidor; proibido erro silencioso, `catch` vazio ou fallback que esconde falha.
 16. **Verificação fecha o trabalho.** Revisor e auditor apontam, não corrigem. Nada é considerado pronto sem passar pelo gate de verificação.
 
@@ -99,7 +99,7 @@ Gate: nenhuma implementação começa sobre decisão estrutural ainda em aberto.
 
 - `documenter` atualiza README, regras, guias e ADRs quando o comportamento muda.
 - Orquestrador consolida: o que foi feito, arquivos, comandos/testes, achados, riscos e próximo passo.
-- Commit/push só com autorização explícita.
+- Commit/push conforme a autorização antecipada da regra 14.
 
 ### Brief obrigatório
 
@@ -168,7 +168,7 @@ Pare e reporte ao orquestrador quando: faltar decisão de produto, a tarefa exig
 ### Dependências e infraestrutura
 
 - Dependência nova exige justificativa: problema, alternativas, custo de manutenção.
-- Sem comando destrutivo, migração irreversível ou alteração de ambiente sem autorização.
+- Sem comando destrutivo, migração irreversível ou alteração de ambiente que não seja estritamente necessária ao trabalho em andamento sem autorização.
 - Configuração sensível por variável de ambiente, com exemplo versionado sem valor real.
 
 ### Testes
@@ -340,7 +340,7 @@ Registrar a origem/licença de cada asset. Não usar material de terceiros sem p
 
 - Código e identificadores em inglês; documentação e comunicação em pt-BR.
 - Mudanças pequenas e focadas; sem reformatar arquivos não relacionados.
-- Nada de commit ou push sem pedido explícito do usuário.
+- Commit, push e comandos de terminal: autorizados antecipadamente pelo dono do projeto (2026-11-12), sem pedido a cada ocorrência, desde que estritamente necessários para prosseguir trabalhando no projeto; operações destrutivas ou irreversíveis fora desse escopo continuam exigindo pedido explícito.
 - Nunca commitar segredos, chaves ou dados reais.
 - Toda aleatoriedade do jogo recebe seed; testes não podem depender de sorte.
 - Regras do jogo no domínio, separadas de UI, persistência e rede.
