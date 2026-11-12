@@ -140,6 +140,33 @@ export class TestConnection {
   }
 }
 
+/**
+ * Espera uma condição **assíncrona** virar verdadeira, reavaliando em
+ * intervalos curtos. Usada para condições que não dependem de mensagem
+ * recebida pela conexão — por exemplo, o descarte da sala no matchmaking,
+ * que acontece depois da saída do cliente.
+ *
+ * A espera é limitada por tentativas, sem depender do relógio: o resultado
+ * do teste não muda com a velocidade da máquina.
+ */
+export async function waitFor(
+  predicate: () => Promise<boolean>,
+  description: string,
+  timeoutMs: number = WAIT_TIMEOUT_MS,
+): Promise<void> {
+  const intervalMs = 20;
+  const attempts = Math.ceil(timeoutMs / intervalMs);
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (await predicate()) {
+      return;
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, intervalMs));
+  }
+
+  throw new Error(`Timeout de ${timeoutMs} ms esperando: ${description}.`);
+}
+
 /** Conexões abertas nesta execução, para o descarte no fim de cada teste. */
 const openConnections = new Set<TestConnection>();
 

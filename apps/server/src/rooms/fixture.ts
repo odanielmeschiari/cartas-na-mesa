@@ -226,6 +226,19 @@ export class FixtureRoom extends Room {
       return;
     }
 
+    // Conflito de vínculo: esta conexão já está presa a **outra** sessão de
+    // jogo. Reatribuir aqui faria duas sessões apontarem para a mesma
+    // conexão: a visão privada das duas mãos chegaria na mesma conexão
+    // (vazamento de carta alheia, contrato §6) e o assento da sessão
+    // original ficaria marcado como conectado para sempre, porque a saída
+    // da conexão resolveria a sessão pelo vínculo novo. O vínculo existente
+    // é preservado e o erro vai só para o remetente.
+    const boundSession = this.sessionByClient.get(client.sessionId);
+    if (boundSession !== undefined && boundSession !== session) {
+      this.sendInfraError(client, 'session_invalid');
+      return;
+    }
+
     const previousClientSessionId = session.clientSessionId;
     if (previousClientSessionId !== null && previousClientSessionId !== client.sessionId) {
       // A conexão antiga ainda ocupa a sessão: encerra-a para que a nova
@@ -501,15 +514,27 @@ export class FixtureRoom extends Room {
   /**
    * Descarte explícito da sala: com `autoDispose = false` ela não morre
    * sozinha, e uma sala vazia ocuparia memória para sempre.
+   *
+   * São descartados dois casos:
+   * - sala vazia **sem partida iniciada**: não há estado de jogo nem assento
+   *   de reconexão a preservar;
+   * - partida encerrada com todos desconectados.
+   *
+   * A partida **em andamento** com todos desconectados permanece viva: o
+   * prazo da janela de reconexão é uma decisão de produto ainda em aberto
+   * (doc 0002 §8, item 1).
    */
   private async disposeIfFinished(): Promise<void> {
-    if (this.gameState === null) {
-      return;
-    }
-    if (fixtureGame.resultOf(this.gameState) === null) {
-      return;
-    }
     if (this.clients.length > 0) {
+      return;
+    }
+
+    if (this.gameState === null) {
+      await this.disconnect();
+      return;
+    }
+
+    if (fixtureGame.resultOf(this.gameState) === null) {
       return;
     }
 

@@ -21,6 +21,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import type { ColyseusSDK } from '@colyseus/sdk';
 import type { ColyseusTestServer } from '@colyseus/testing';
+import { matchMaker } from 'colyseus';
 
 import {
   at,
@@ -39,6 +40,7 @@ import {
   stateVersions,
   stringValues,
   validateMessages,
+  waitFor,
   type TestConnection,
 } from './fixture.integration.helper';
 
@@ -499,6 +501,89 @@ describe('S3 — informação oculta por jogador', () => {
       expect(payloadValuesMatching(guest.messages, hostHandAfter)).toEqual([]);
       expect(rawJsonMatching(host.messages, guestHandAfter)).toEqual([]);
       expect(rawJsonMatching(guest.messages, hostHandAfter)).toEqual([]);
+    },
+    TEST_TIMEOUT_MS,
+  );
+});
+
+describe('Reconexão — uma sessão por conexão', () => {
+  it(
+    'recusa reconnect com o token de outra sessão e não entrega a mão alheia ao dono da outra sessão',
+    async () => {
+      const { host, guest, hostAccepted, guestAccepted, matchId } = await setupMatch(sdk);
+
+      const hostHand = lastStatePrivate(host).view.hand;
+      const guestHand = lastStatePrivate(guest).view.hand;
+
+      // Ana, dona da sessão 1, apresenta o token da Bia, dona da sessão 2.
+      host.room.send('reconnect', {
+        type: 'reconnect',
+        roomCode: guestAccepted.roomCode,
+        sessionToken: guestAccepted.sessionToken,
+      });
+
+      const error = await awaitError(host, 'o erro "session_invalid" para o token de outra sessão');
+      expect(error.code).toBe('session_invalid');
+      expect(error.message.length).toBeGreaterThan(0);
+
+      // A visão privada da Bia não vazou para a conexão da Ana: nem no payload
+      // estruturado, nem no JSON bruto de tudo que a conexão recebeu.
+      expect(payloadValuesMatching(host.messages, guestHand)).toEqual([]);
+      expect(rawJsonMatching(host.messages, guestHand)).toEqual([]);
+
+      // Toda visão privada recebida pela Ana é a da própria sessão.
+      const hostViews = validateMessages(host.messages).state_private;
+      expect(hostViews.length).toBeGreaterThan(0);
+      for (const view of hostViews) {
+        expect(view.view.playerId).toBe(hostAccepted.playerId);
+      }
+
+      // A identidade da Bia não foi reatribuída à conexão da Ana.
+      for (const accepted of validateMessages(host.messages).join_accepted) {
+        expect(accepted.playerId).toBe(hostAccepted.playerId);
+      }
+
+      // A recusa não mudou o estado público de ninguém.
+      expect(stateVersions(host)).toEqual([0]);
+      expect(stateVersions(guest)).toEqual([0]);
+
+      // Barreira de sincronização: a partida continua jogável e a sessão da
+      // Bia segue intacta (a jogada da Ana é processada depois do erro).
+      const cardId = at(hostHand, 0, 'a mão de Ana');
+      playCard(host, matchId, 0, cardId);
+      await awaitStateVersion(host, 1);
+      await awaitStateVersion(guest, 1);
+
+      const guestView = lastStatePrivate(guest);
+      expect(guestView.view.playerId).toBe(guestAccepted.playerId);
+      expect(guestView.view.hand).toHaveLength(2);
+      expect(lastStatePublic(guest)).toEqual(lastStatePublic(host));
+    },
+    TEST_TIMEOUT_MS,
+  );
+});
+
+describe('Ciclo de vida da sala', () => {
+  it(
+    'descarta a sala vazia sem partida iniciada',
+    async () => {
+      const host = await connectHost(sdk, 'Ana');
+      const hostAccepted = await awaitJoinAccepted(host);
+      const roomCode = hostAccepted.roomCode;
+
+      // A sala existe no matchmaking enquanto o jogador está conectado.
+      expect(await matchMaker.getRoomById(roomCode)).toBeDefined();
+
+      // O jogador sai sem que a partida comece (ninguém sentou no segundo
+      // assento): a sala não tem mais o que preservar.
+      await host.room.leave();
+
+      await waitFor(
+        async () => (await matchMaker.getRoomById(roomCode)) === undefined,
+        `a sala "${roomCode}" ser descartada do matchmaking`,
+      );
+
+      expect(await matchMaker.getRoomById(roomCode)).toBeUndefined();
     },
     TEST_TIMEOUT_MS,
   );
