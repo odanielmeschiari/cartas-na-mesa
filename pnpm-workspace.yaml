@@ -4,5 +4,10 @@ packages:
 allowBuilds:
   esbuild: true
   msgpackr-extract: true
+# O Colyseus puxa uWebSockets.js de um repositório git; sem isto o pnpm
+# rejeita a resolução como dependência exótica.
+blockExoticSubdeps: false
+saveExact: true
+engineStrict: true
 minimumReleaseAgeExclude:
   - prettier@3.10.1
