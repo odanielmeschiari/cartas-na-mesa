@@ -209,6 +209,7 @@ Pare e reporte ao orquestrador quando: faltar decisão de produto, a tarefa exig
 - **Mesa antes de menu**: a partida ocupa a tela; menus são discretos e contextuais.
 - **Acessível**: teclado, leitores de tela, contraste, daltonismo e movimento reduzido.
 - **Extensível**: novos jogos de cartas entram como módulos, sem reescrever a infraestrutura.
+- **Reuso máximo**: identificar e reutilizar mecânicas e componentes realmente compartilhados entre jogos, em vez de duplicá-los. Isso inclui, quando aplicável, embaralhamento, distribuição/compra de cartas, animações e interações comuns. Manter as regras específicas de cada jogo nos respectivos módulos; abstrações compartilhadas não devem forçar jogos diferentes a adotar o mesmo comportamento quando as regras não forem iguais.
 - **Somente fichas fictícias**: nada de dinheiro real, compras, loot boxes ou apostas.
 
 ## Funcionalidades obrigatórias
@@ -344,6 +345,7 @@ Registrar a origem/licença de cada asset. Não usar material de terceiros sem p
 - Toda aleatoriedade do jogo recebe seed; testes não podem depender de sorte.
 - Regras do jogo no domínio, separadas de UI, persistência e rede.
 - Nenhum jogo específico pode ser "hardcoded" na infraestrutura de salas/mesa.
+- Reutilizar ao máximo mecânicas e componentes comuns entre jogos (por exemplo, animações e operações de embaralhamento, distribuição e compra de cartas), mantendo em cada módulo as regras que forem específicas da modalidade.
 - Acessibilidade e responsividade fazem parte do critério de pronto.
 - Fichas, pontos e moedas são sempre fictícios.
 
