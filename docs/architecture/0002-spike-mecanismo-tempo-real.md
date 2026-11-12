@@ -395,8 +395,16 @@ pessoal (regra 5) e a ausência de script de build perigoso.
 - **Isolamento da visão privada por conexão**: `state_private` é enviada **por conexão**, com a
   visão calculada para o dono; a verificação varre o payload estruturado e o JSON bruto de tudo
   que cada conexão recebeu, e nenhum identificador da mão alheia aparece.
-- **Códigos de erro do contrato com teste dedicado**: `invalid_payload`, `not_your_turn`,
-  `card_not_in_hand`, `stale_state`, `match_not_found` e `session_invalid`.
+- **Códigos de erro do contrato com teste dedicado**: `invalid_payload` (payload inválido e tipo
+  de mensagem desconhecido), `not_your_turn`, `card_not_in_hand`, `stale_state`, `match_not_found`,
+  `session_invalid` (token de outra sessão e token desconhecido), `room_not_found`, `game_finished`
+  e `room_full`.
+- **S4 (reconexão)**: a queda da conexão é observada pelo outro jogador como assento ausente
+  (`connected: false`) com o **assento preservado**; a reconexão pelo `roomCode` + `sessionToken`
+  devolve o **mesmo `playerId`**, o **mesmo `seatIndex`** e o **mesmo `sessionToken`**, com a
+  **mesma mão** e o **mesmo estado de turno**; a sala continua com **2 jogadores e sem assento
+  duplicado**, o outro jogador volta a ver o assento como presente e a partida continua jogável
+  depois da reconexão.
 - **Validação manual com `safeParse`** em cada handler: payload inválido é recusado com
   `invalid_payload` **sem derrubar a conexão**.
 - **Ciclo de vida da sala**: a sala vazia — **com ou sem partida iniciada** e **com ou sem
@@ -408,23 +416,39 @@ pessoal (regra 5) e a ausência de script de build perigoso.
 
 **Ainda não coberto:**
 
-- **S4 (reconexão) não tem teste automatizado.** O caminho de reconexão existe no código, mas o
-  cenário de queda e retorno — voltar ao mesmo assento com a mesma mão, a sala com 2 jogadores e
-  sem assento duplicado — ainda não é verificado. O que existe hoje é o teste do **conflito de
-  vínculo**: uma conexão já presa a uma sessão que apresenta o token de outra é recusada com
-  `session_invalid`, sem vazar a visão privada alheia.
-- **Erros sem teste dedicado**: `room_full`, `session_invalid` por token **desconhecido**,
-  `game_finished` e `room_not_found` por código errado.
 - **Não existem ainda**: listagem de salas públicas, dono da sala e início manual da partida
   (§8, itens 4 e 5).
 - **Pendentes da auditoria de segurança**: A3, A4, A5, A6 e A8 (§7) e o limite de tamanho do
   `avatarId` (§8, item 11). Nenhum deles foi corrigido; cada um tem um momento de resolução
   registrado nos itens citados.
 
+**Fatos de comportamento verificados nos testes** (importantes para a borda do cliente):
+
+1. **`room_full` por mensagem exige vaga de conexão livre.** Com os dois jogadores conectados, a 3ª
+   conexão é barrada **no matchmaking** (falha HTTP "… is already full"), **sem** mensagem `error`
+   para ninguém. A mensagem `room_full` só é alcançada quando há **vaga de conexão** do Colyseus
+   livre — por exemplo, quando um jogador saiu e o assento de jogo dele foi preservado. Como o
+   fixture tem `maxClients = 2`, o `room_full` por mensagem exigiria `maxClients > 2`.
+2. **Código de sala inexistente falha no matchmaking, não no protocolo.** `join_room`/`reconnect`
+   com um `roomCode` que não existe falha **antes** do WebSocket e chega como `MatchMakeError`
+   (código Colyseus `MATCHMAKE_INVALID_ROOM_ID`) — **nunca** como mensagem `error` do protocolo. O
+   `room_not_found` **por mensagem** exige um WebSocket já aberto numa sala existente, com
+   `roomCode` divergente do código da sala.
+
+3. **`game_finished` cobre também a partida que ainda não começou.** O `game_finished` é devolvido
+   quando não há partida para aplicar no motor — o que acontece **antes** do segundo assento (a
+   partida ainda não nasceu) e **depois** do fim. Um `action_intent` que chegue antes do segundo
+   assento é recusado com `game_finished`, e não com `stale_state` ou `match_not_found`.
+
+> **Aviso para a borda do cliente:** os erros de matchmaking **não** são mensagens `error`. A borda
+> precisa traduzi-los para os mesmos `code` do protocolo, como a §5.1 já prevê.
+
 **Onde estão os testes:**
 
-- `apps/server/src/rooms/fixture.integration.test.ts` — os testes de integração (S1–S3, o conflito
-  de vínculo na reconexão, o ciclo de vida da sala e o prazo de identidade).
+- `apps/server/src/rooms/fixture.integration.test.ts` — os testes de integração, com **24 casos**:
+  **S1** (3), **S2** (7), **S3** (3), o **conflito de vínculo** na reconexão (1), o
+  **`S4 — reconexão após queda`** (1), o **ciclo de vida da sala** (2), o **prazo de identidade** (2)
+  e os **`Códigos de erro do contrato`** (5).
 - `apps/server/src/rooms/fixture.integration.helper.ts` — o harness: sobe um servidor Colyseus
   real, conecta clientes reais do SDK oficial e acumula **todas** as mensagens recebidas por
   conexão (o "payload bruto" exigido pelo ADR-001).

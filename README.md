@@ -2,7 +2,7 @@
 
 Plataforma web de jogos de cartas para jogar rapidamente, sem cadastro: sozinho contra bots, aprendendo com tutoriais ou com amigos em uma sala online.
 
-> **Estado do projeto:** fundação do monorepo, protocolo compartilhado e motor fixture estão implementados. O servidor do spike está implementado conforme o contrato de rede, com testes de integração S1–S3 automatizados, usando servidor e clientes Colyseus reais. A auditoria de segurança do spike foi executada: os dois achados de alto — vazamento de sala vazia sem identidade e conexão sem identidade segurando uma vaga de conexão — foram corrigidos, cada um com teste de regressão. Ainda falta o cliente do spike, o critério S4 (reconexão) e os pendentes de endurecimento registrados em `next_tasks.md`. Ainda não é uma versão pronta para jogar.
+> **Estado do projeto:** fundação do monorepo, protocolo compartilhado e motor fixture estão implementados. O servidor do spike está implementado conforme o contrato de rede, com testes de integração S1–S4 automatizados, usando servidor e clientes Colyseus reais. A auditoria de segurança do spike foi executada: os dois achados de alto — vazamento de sala vazia sem identidade e conexão sem identidade segurando uma vaga de conexão — foram corrigidos, cada um com teste de regressão. Ainda falta o cliente do spike e os pendentes de endurecimento registrados em `next_tasks.md`. Ainda não é uma versão pronta para jogar.
 
 ## Visão do produto
 

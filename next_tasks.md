@@ -11,21 +11,28 @@ Colyseus, a identidade do jogador chega por **mensagem** (`create_room`/`join_ro
 seed da partida é gerada **no servidor**, a validação é **manual** com `safeParse` — sem derrubar a
 conexão — e todo `error` é entregue **só ao remetente**. A aleatoriedade de produção passa por
 `apps/server/src/rooms/random.ts`, porta de entrada única baseada em CSPRNG: **não há
-`Math.random` em nenhum caminho de produção**. Os testes de integração **S1–S3 estão automatizados**,
-com servidor Colyseus real e clientes reais do SDK oficial. A revisão independente **foi feita** e
-seus dois achados bloqueantes foram corrigidos (vínculo de sessão na reconexão e descarte da sala
-vazia sem partida). A **auditoria de segurança também foi executada** (2026-11-12): **nenhum achado
-crítico**; os **dois achados alto** — _vazamento de sala vazia sem identidade_ e _conexão sem
-identidade segurando uma vaga de conexão_ — foram **corrigidos**, cada um com **teste de
-regressão**. Restaram achados de severidade menor, **pendentes**: **A3** (seed de 32 bits em PRNG não
-criptográfico), **A4** (sala de teste com seed fixa dentro de `src/`), **A5** (dependência Git
+`Math.random` em nenhum caminho de produção**. Os testes de integração **S1–S4 estão automatizados**,
+com servidor Colyseus real e clientes reais do SDK oficial: o **S4 (reconexão)** tem **teste
+automatizado** e os **quatro códigos de erro** `room_full`, `session_invalid` (token desconhecido),
+`game_finished` e `room_not_found` (código errado) têm **teste dedicado**. A revisão independente
+**foi feita** e seus dois achados bloqueantes foram corrigidos (vínculo de sessão na reconexão e
+descarte da sala vazia sem partida). A **auditoria de segurança também foi executada** (2026-11-12):
+**nenhum achado crítico**; os **dois achados alto** — _vazamento de sala vazia sem identidade_ e
+_conexão sem identidade segurando uma vaga de conexão_ — foram **corrigidos**, cada um com **teste
+de regressão**. Restaram achados de severidade menor, **pendentes**: **A3** (seed de 32 bits em PRNG
+não criptográfico), **A4** (sala de teste com seed fixa dentro de `src/`), **A5** (dependência Git
 `uWebSockets.js` na árvore sem uso), **A6** (`roomCode` no metadata público), **A8** (mensagem de
 erro do motor passa crua) e o **limite de tamanho do `avatarId`** — detalhados em
-[Pendências da auditoria de segurança](#pendências-da-auditoria-de-segurança). **Pendentes:**
-teste automatizado do critério **S4**, testes dedicados de `room_full`, `session_invalid`,
-`game_finished` e `room_not_found`, o spike do cliente e a aprovação do gate. `pnpm typecheck`,
-`pnpm lint`, `pnpm test` (8 arquivos, 115 testes) e `pnpm format:check` passam. Houve **commit e
-push**: a branch `main` foi publicada em `origin/main` (HEAD `77169fd`).
+[Pendências da auditoria de segurança](#pendências-da-auditoria-de-segurança). **Pendentes:** o
+hardening das pendências da auditoria, o spike do cliente e a aprovação do gate. `pnpm typecheck`,
+`pnpm lint`, `pnpm test` (8 arquivos, 121 testes) e `pnpm format:check` passam. Houve **commit**,
+mas **o push desta rodada ainda não ocorreu**: `git status -sb` mostra
+`main...origin/main [à frente 2]`, com o HEAD local em `bdb96f3`
+(`add-testes-dos-codigos-de-erro-do-contrato`) e o HEAD de `origin/main` em `346fedf`
+(`git log --oneline origin/main -3` → `346fedf registra-auditoria-de-seguranca-do-spike`,
+`77169fd endurece-ciclo-de-vida-e-vinculo-de-sessao-da-sala`,
+`8733643 atualiza-documentacao-do-spike`). A branch `main` publicada **não** contém as rodadas de
+teste do S4 e dos códigos de erro.
 
 **Instalação:** o pnpm 12 lê as opções do projeto de `pnpm-workspace.yaml` — o `.npmrc` só é lido
 para auth, registry, TLS, proxy e endereço local. A dependência Git `uWebSockets.js`, puxada pelo
@@ -56,7 +63,7 @@ registrados em
 ### 1. Scaffold do monorepo
 
 **Status: concluído.** Scaffold do monorepo criado. `pnpm typecheck`, `pnpm lint`, `pnpm test`
-(8 arquivos, 115 testes) e `pnpm format:check` passaram mais recentemente. A instalação
+(8 arquivos, 121 testes) e `pnpm format:check` passaram mais recentemente. A instalação
 reproduzível com lockfile foi validada com `pnpm install --frozen-lockfile` — executado com sucesso,
 com o `pnpm-lock.yaml` commitado, conforme o resumo do estado.
 
@@ -97,9 +104,16 @@ indicados no resumo do estado.
   **com ou sem partida iniciada** e **com ou sem identidade informada** — e partida encerrada com
   todos desconectados; partida **em andamento** com todos desconectados permanece viva, na espera da
   decisão de produto sobre a janela de reconexão;
-- testes de integração **S1–S3 automatizados**, com servidor Colyseus real e clientes reais do SDK
-  oficial (`apps/server/src/rooms/fixture.integration.test.ts`), mais os testes de regressão do
-  ciclo de vida da sala e do prazo de identidade. A suíte tem **8 arquivos e 115 testes**.
+- testes de integração **S1–S4 automatizados**, com servidor Colyseus real e clientes reais do
+  SDK oficial (`apps/server/src/rooms/fixture.integration.test.ts`), mais os testes de regressão do
+  ciclo de vida da sala e do prazo de identidade. A suíte tem **8 arquivos e 121 testes**;
+- **S4 (reconexão) automatizado**: a queda da conexão é vista pelo outro jogador como assento
+  ausente (`connected: false`) com o assento preservado; a reconexão pelo `roomCode` +
+  `sessionToken` devolve o mesmo `playerId`, `seatIndex` e `sessionToken`, com a mesma mão e o
+  mesmo estado de turno; a sala continua com 2 jogadores e sem assento duplicado, o outro jogador
+  volta a ver o assento como presente e a partida continua jogável depois da reconexão;
+- **códigos de erro do contrato com teste dedicado**: `room_not_found`, `session_invalid` (token
+  desconhecido), `game_finished`, `invalid_payload` (tipo de mensagem desconhecido) e `room_full`.
 
 **Dois defeitos encontrados na revisão e corrigidos**, cada um com teste de regressão:
 
@@ -117,20 +131,18 @@ vaga de conexão_ (corrigida pelo prazo de identidade). Os achados de severidade
 **pendentes** — ver
 [Pendências da auditoria de segurança](#pendências-da-auditoria-de-segurança).
 
-**Ainda não coberto:** o critério **S4 (reconexão) não tem teste automatizado** — o caminho existe
-no código, mas o cenário de queda e retorno (voltar ao mesmo assento com a mesma mão, a sala com 2
-jogadores e sem assento duplicado) não é verificado. Também **não têm teste dedicado** os erros
-`room_full`, `session_invalid` (token desconhecido), `game_finished` e `room_not_found` (código
-errado). Não existem ainda listagem de salas públicas, dono da sala e início manual da partida.
+**Ainda não coberto:** não existem ainda listagem de salas públicas, dono da sala e início manual
+da partida (§8, itens 4 e 5 do doc 0002). As pendências de hardening da auditoria de segurança (A3,
+A4, A5, A6, A8 e o limite de tamanho do `avatarId`) seguem abertas.
 
-**Próximo passo atômico:** item 6 do gate (teste do S4, hardening das pendências da auditoria e
-spike do cliente).
+**Próximo passo atômico:** item 6 do gate (hardening das pendências da auditoria e spike do
+cliente).
 
 ### 5. Spike do cliente mínimo
 
 **Status: pronto para iniciar.** A pré-condição desta tarefa — servidor implementado e critérios
-S1–S3 verificados — **está satisfeita**. O S4 ainda depende do cliente, e do teste automatizado do
-critério S4 no servidor (itens 4 e 6).
+S1–S4 verificados — **está satisfeita**. Falta a validação do S4 **ponta a ponta** no navegador
+(item 6).
 **Agente:** `implementer` (layout mínimo com `designer` se necessário) · **Depende:** item 4
 **Pronto quando:** duas abas completam S1–S4 do ADR.
 
@@ -142,19 +154,18 @@ teste de regressão. A **auditoria de segurança também foi concluída** (2026-
 crítico; os dois achados de alto (vazamento de sala vazia sem identidade; conexão sem identidade
 segurando uma vaga de conexão) foram **corrigidos**, com teste de regressão; os achados de
 severidade menor ficaram **pendentes** (ver
-[Pendências da auditoria de segurança](#pendências-da-auditoria-de-segurança)). **Não declarar S1–S4
-aprovados:** S1–S3 têm teste automatizado, **S4 não tem**.
+[Pendências da auditoria de segurança](#pendências-da-auditoria-de-segurança)). **S1–S4 têm teste
+automatizado**: o **S4 (reconexão)** foi coberto e os **quatro códigos de erro** `room_full`,
+`session_invalid` (token desconhecido), `game_finished` e `room_not_found` (código errado) têm
+**teste dedicado**. O gate **ainda não está aprovado**: falta o hardening, o spike do cliente e a
+execução final.
 **Próximas ações, nesta ordem, cada uma como passo atômico:**
 
-1. Teste automatizado do critério **S4** (reconexão): queda e retorno preservam assento e mão, sem
-   assento duplicado, e o estado público reflete `connected`.
-2. Testes dedicados para os erros `room_full`, `session_invalid` (token desconhecido),
-   `game_finished` e `room_not_found` (código errado).
-3. Hardening: resolver as pendências da auditoria de segurança (A3, A4, A5, A6, A8 e o limite de
+1. Hardening: resolver as pendências da auditoria de segurança (A3, A4, A5, A6, A8 e o limite de
    tamanho do `avatarId`), cada uma no momento indicado na tabela abaixo.
-4. Spike do cliente mínimo e S4 ponta a ponta (duas abas completam S1–S4 do ADR).
-5. Execução final de typecheck, lint, test, build e format.
-6. Aprovação do gate, sem achados bloqueantes.
+2. Spike do cliente mínimo e S4 ponta a ponta (duas abas completam S1–S4 do ADR).
+3. Execução final de typecheck, lint, test, build e format.
+4. Aprovação do gate, sem achados bloqueantes.
 
 **Agentes:** `tester`, `reviewer`, `security` · **Depende:** item 5
 **Pronto quando:** S1–S4 passam automatizados, zero achados bloqueantes e o ADR é atualizado se
