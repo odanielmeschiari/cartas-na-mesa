@@ -102,3 +102,16 @@ describe('createLastRoomStore', () => {
     expect(store.load()).toBeNull();
   });
 });
+
+describe('validade da sala salva', () => {
+  it('esquece a sala depois do prazo e mantém antes dele', () => {
+    let clock = 1_000;
+    const store = createLastRoomStore(new MemoryStorage(), { now: () => clock, ttlMs: 500 });
+    store.save('ABC123');
+    clock = 1_400;
+    expect(store.load()).toBe('ABC123');
+    clock = 1_600;
+    expect(store.load()).toBeNull();
+    expect(store.load()).toBeNull();
+  });
+});

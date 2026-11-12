@@ -22,20 +22,15 @@ export function RoomPanel({ room, onPlayCard, onLeave }: RoomPanelProps) {
 
   return (
     <div className="flex flex-col gap-6">
-      <section
-        aria-labelledby="room-heading"
-        className="flex flex-col gap-3 rounded-lg border border-stone-300 bg-white p-4 shadow-sm"
-      >
-        <h2 className="text-lg font-semibold" id="room-heading">
+      <section aria-labelledby="room-heading" className="flex flex-col gap-3 cnm-panel">
+        <h2 className="text-lg font-bold" id="room-heading">
           Sala
         </h2>
 
         <dl className="flex flex-col gap-2">
           <div className="flex flex-wrap items-baseline gap-2">
             <dt className="text-sm font-semibold text-stone-700">Código da sala</dt>
-            <dd className="text-xl font-bold tracking-widest text-stone-900">
-              {room.roomCode ?? '—'}
-            </dd>
+            <dd className="cnm-code">{room.roomCode ?? '—'}</dd>
           </div>
           <div className="flex flex-wrap items-baseline gap-2">
             <dt className="text-sm font-semibold text-stone-700">Partida (depuração)</dt>
@@ -52,31 +47,21 @@ export function RoomPanel({ room, onPlayCard, onLeave }: RoomPanelProps) {
         </p>
 
         <div>
-          <button
-            className="cnm-interactive rounded-md border border-stone-700 bg-white px-3 py-2 text-sm font-semibold text-stone-900"
-            onClick={onLeave}
-            type="button"
-          >
+          <button className="cnm-btn cnm-btn-light" onClick={onLeave} type="button">
             Sair da sala
           </button>
         </div>
       </section>
 
-      <section
-        aria-labelledby="seats-heading"
-        className="flex flex-col gap-3 rounded-lg border border-stone-300 bg-white p-4 shadow-sm"
-      >
-        <h2 className="text-lg font-semibold" id="seats-heading">
+      <section aria-labelledby="seats-heading" className="flex flex-col gap-3 cnm-panel">
+        <h2 className="text-lg font-bold" id="seats-heading">
           Assentos
         </h2>
         <SeatList seats={room.seats} />
       </section>
 
-      <section
-        aria-labelledby="public-heading"
-        className="flex flex-col gap-3 rounded-lg border border-stone-300 bg-white p-4 shadow-sm"
-      >
-        <h2 className="text-lg font-semibold" id="public-heading">
+      <section aria-labelledby="public-heading" className="flex flex-col gap-3 cnm-panel">
+        <h2 className="text-lg font-bold" id="public-heading">
           Mesa (estado público)
         </h2>
 
@@ -120,11 +105,8 @@ export function RoomPanel({ room, onPlayCard, onLeave }: RoomPanelProps) {
         )}
       </section>
 
-      <section
-        aria-labelledby="hand-heading"
-        className="flex flex-col gap-3 rounded-lg border border-stone-300 bg-white p-4 shadow-sm"
-      >
-        <h2 className="text-lg font-semibold" id="hand-heading">
+      <section aria-labelledby="hand-heading" className="flex flex-col gap-3 cnm-panel">
+        <h2 className="text-lg font-bold" id="hand-heading">
           Sua mão (visão privada)
         </h2>
         <HandList hand={privateState} onPlayCard={onPlayCard} />

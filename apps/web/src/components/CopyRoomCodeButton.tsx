@@ -30,7 +30,7 @@ export function CopyRoomCodeButton({ roomCode }: CopyRoomCodeButtonProps) {
   return (
     <div className="flex flex-wrap items-center gap-2">
       <button
-        className="cnm-interactive rounded-md border border-stone-700 bg-white px-3 py-2 text-sm font-semibold text-stone-900 disabled:cursor-not-allowed disabled:opacity-60"
+        className="cnm-btn cnm-btn-light"
         disabled={roomCode === null}
         onClick={() => void handleCopy()}
         type="button"

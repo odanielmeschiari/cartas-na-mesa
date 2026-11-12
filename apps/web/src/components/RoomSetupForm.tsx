@@ -64,18 +64,16 @@ export function RoomSetupForm({
   onRoomCodeChange,
   onSubmit,
 }: RoomSetupFormProps) {
+  const hasCode = roomCode.trim().length > 0;
+
   const handleSubmit = (event: FormEvent<HTMLFormElement>): void => {
     event.preventDefault();
     onSubmit(readIntent(event));
   };
 
   return (
-    <form
-      className="flex flex-col gap-4 rounded-lg border border-stone-300 bg-white p-4 shadow-sm"
-      noValidate
-      onSubmit={handleSubmit}
-    >
-      <h2 className="text-lg font-semibold">Entrar na mesa</h2>
+    <form className="flex flex-col gap-4 cnm-panel" noValidate onSubmit={handleSubmit}>
+      <h2 className="text-lg font-bold">Entrar na mesa</h2>
 
       <div className="flex flex-col gap-1">
         <label className="text-sm font-semibold" htmlFor="nickname">
@@ -85,7 +83,7 @@ export function RoomSetupForm({
           aria-describedby={nicknameError === null ? undefined : 'nickname-error'}
           aria-invalid={nicknameError === null ? undefined : true}
           autoComplete="nickname"
-          className="cnm-interactive rounded-md border border-stone-500 bg-white px-3 py-2 text-base text-stone-900"
+          className="cnm-input text-stone-900"
           disabled={busy}
           id="nickname"
           maxLength={NICKNAME_MAX_LENGTH}
@@ -112,7 +110,7 @@ export function RoomSetupForm({
           aria-invalid={roomCodeError === null ? undefined : true}
           autoCapitalize="characters"
           autoComplete="off"
-          className="cnm-interactive rounded-md border border-stone-500 bg-white px-3 py-2 text-base uppercase text-stone-900"
+          className="cnm-input uppercase text-stone-900"
           disabled={busy}
           id="room-code"
           name="roomCode"
@@ -132,24 +130,27 @@ export function RoomSetupForm({
       </div>
 
       <div className="flex flex-wrap gap-2">
+        {/* O primeiro botão é o que o Enter aciona: com código digitado, ele entra na sala. */}
         <button
-          className="cnm-interactive rounded-md bg-stone-900 px-4 py-2 font-semibold text-stone-50 disabled:cursor-not-allowed disabled:opacity-60"
+          className="cnm-btn cnm-btn-dark"
           disabled={busy}
           name="action"
           type="submit"
-          value="create"
+          value={hasCode ? 'join' : 'create'}
         >
-          Criar sala
+          {hasCode ? 'Entrar na sala' : 'Criar sala'}
         </button>
-        <button
-          className="cnm-interactive rounded-md border border-stone-700 bg-white px-4 py-2 font-semibold text-stone-900 disabled:cursor-not-allowed disabled:opacity-60"
-          disabled={busy}
-          name="action"
-          type="submit"
-          value="join"
-        >
-          Entrar
-        </button>
+        {hasCode ? (
+          <button
+            className="cnm-btn cnm-btn-light"
+            disabled={busy}
+            name="action"
+            type="submit"
+            value="create"
+          >
+            Criar sala nova
+          </button>
+        ) : null}
       </div>
     </form>
   );

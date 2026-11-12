@@ -72,16 +72,16 @@ export function App() {
   }
 
   return (
-    <main className="min-h-screen bg-stone-100 px-4 py-6 text-stone-900">
+    <main className="cnm-page min-h-screen px-4 py-6">
       <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
         <header className="flex flex-col gap-1">
-          <h1 className="text-2xl font-bold">Cartas na Mesa</h1>
-          <p className="text-sm text-stone-700">
-            Spike do jogo-fixture: duas conexões, uma sala, estado autoritativo.
+          <h1 className="cnm-title">♠ Cartas na Mesa ♥</h1>
+          <p className="text-sm text-emerald-100">
+            Jogue cartas com um amigo em uma sala privada, ou treine uma Paciência.
           </p>
           <div>
             <button
-              className="cnm-interactive mt-2 rounded-md bg-emerald-800 px-4 py-2 text-sm font-semibold text-white"
+              className="cnm-btn cnm-btn-gold mt-2"
               onClick={() => setMode('solo')}
               type="button"
             >
@@ -100,37 +100,37 @@ export function App() {
         ) : (
           <>
             {spike.phase === 'connecting' ? (
-              <p
-                aria-live="polite"
-                className="rounded-md border border-stone-300 bg-white px-3 py-2 text-sm font-semibold text-stone-900"
-                role="status"
-              >
+              <p aria-live="polite" className="cnm-panel text-sm font-semibold" role="status">
                 Conectando ao servidor…
               </p>
             ) : (
-              <p className="text-sm text-stone-700">
+              <p className="text-sm text-emerald-100">
                 Nenhuma sala ativa. Crie uma sala ou entre com o código de uma sala.
               </p>
             )}
 
             {spike.phase === 'idle' && spike.resumeRoomCode !== null ? (
-              <section
-                aria-labelledby="resume-heading"
-                className="flex flex-col gap-3 rounded-lg border border-stone-300 bg-white p-4 shadow-sm"
-              >
+              <section aria-labelledby="resume-heading" className="flex flex-col gap-3 cnm-panel">
                 <h2 className="text-lg font-semibold" id="resume-heading">
                   Retomar partida
                 </h2>
                 <p className="text-sm text-stone-900">
                   Há uma partida salva na sala <strong>{spike.resumeRoomCode}</strong>.
                 </p>
-                <div>
+                <div className="flex flex-wrap gap-2">
                   <button
-                    className="cnm-interactive rounded-md bg-stone-900 px-4 py-2 font-semibold text-stone-50"
+                    className="cnm-btn cnm-btn-dark"
                     onClick={() => void spike.reconnectRoom()}
                     type="button"
                   >
                     Retomar partida
+                  </button>
+                  <button
+                    className="cnm-btn cnm-btn-light"
+                    onClick={spike.forgetResumableRoom}
+                    type="button"
+                  >
+                    Descartar
                   </button>
                 </div>
               </section>

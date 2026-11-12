@@ -19,7 +19,7 @@ export function SeatList({ seats }: SeatListProps) {
       ) : (
         seats.map((seat) => (
           <li
-            className="flex flex-wrap items-baseline gap-x-2 rounded-md border border-stone-300 bg-white px-3 py-2"
+            className={`cnm-seat ${seat.turnLabel === null ? '' : 'cnm-seat-turn'}`}
             key={seat.playerId}
           >
             <span className="font-semibold text-stone-900">{seat.nickname}</span>

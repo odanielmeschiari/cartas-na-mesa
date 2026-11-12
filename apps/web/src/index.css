@@ -219,3 +219,113 @@
   background: rgb(2 44 34 / 0.88);
   text-align: center;
 }
+
+/* ------------------------------------------------------------------ *
+ * Sala online: tema comum
+ * ------------------------------------------------------------------ */
+.cnm-page {
+  color: #1c1917;
+  background: radial-gradient(ellipse at 50% 0%, #15803d 0%, #166534 40%, #14532d 100%) fixed;
+}
+
+.cnm-title {
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: clamp(1.6rem, 5vw, 2.4rem);
+  font-weight: 700;
+  color: #fde68a;
+  text-shadow: 0 2px 0 rgb(0 0 0 / 0.35);
+}
+
+.cnm-panel {
+  border-radius: 1rem;
+  border: 1px solid #d6c9a5;
+  background: #fffdf7;
+  padding: 1rem;
+  box-shadow: 0 10px 24px -12px rgb(0 0 0 / 0.55);
+}
+
+.cnm-input {
+  border-radius: 0.6rem;
+  border: 2px solid #a8a29e;
+  background: #fff;
+  padding: 0.55rem 0.75rem;
+  font-size: 1rem;
+  color: #1c1917;
+}
+
+.cnm-input:focus-visible {
+  border-color: #1d4ed8;
+}
+
+.cnm-btn-dark {
+  background: #14532d;
+  color: #f0fdf4;
+  box-shadow: 0 1px 0 #052e16;
+}
+
+.cnm-btn-light {
+  background: #fff;
+  color: #1c1917;
+  border: 1px solid #57534e;
+  box-shadow: none;
+}
+
+.cnm-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 1.6rem;
+  font-weight: 800;
+  letter-spacing: 0.25em;
+  color: #14532d;
+  background: #ecfccb;
+  border-radius: 0.5rem;
+  padding: 0.1rem 0.6rem;
+}
+
+.cnm-seat {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.15rem 0.5rem;
+  border-radius: 0.75rem;
+  border: 2px solid #e7e5e4;
+  background: #fafaf9;
+  padding: 0.55rem 0.8rem;
+}
+
+.cnm-seat-turn {
+  border-color: #ca8a04;
+  background: #fefce8;
+}
+
+.cnm-hand-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 4.75rem;
+  aspect-ratio: 5 / 7;
+  border-radius: 0.6rem;
+  border: 2px solid #44403c;
+  background: #fff;
+  color: #1c1917;
+  box-shadow: 0 3px 8px rgb(0 0 0 / 0.25);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .cnm-hand-card {
+    transition:
+      transform 120ms ease-out,
+      box-shadow 120ms ease-out;
+  }
+}
+
+.cnm-hand-card:not(:disabled):hover {
+  transform: translateY(-6px);
+  box-shadow: 0 10px 16px rgb(0 0 0 / 0.3);
+  border-color: #ca8a04;
+}
+
+.cnm-hand-card:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}

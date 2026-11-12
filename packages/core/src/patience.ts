@@ -13,7 +13,7 @@ import { shuffle, type Rng } from './rng';
 
 export type PatienceSuit = 'ouro' | 'copa' | 'espada' | 'paus';
 export type PatienceValue =
-  | 'A' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' | '10' | 'J' | 'Q' | 'K';
+  'A' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' | '10' | 'J' | 'Q' | 'K';
 
 export interface PatienceCard {
   suit: PatienceSuit;
@@ -23,7 +23,19 @@ export interface PatienceCard {
 
 export const PATIENCE_SUITS: readonly PatienceSuit[] = ['ouro', 'copa', 'espada', 'paus'];
 export const PATIENCE_VALUES: readonly PatienceValue[] = [
-  'A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K',
+  'A',
+  '2',
+  '3',
+  '4',
+  '5',
+  '6',
+  '7',
+  '8',
+  '9',
+  '10',
+  'J',
+  'Q',
+  'K',
 ];
 
 /** Ouros (♦) e copas (♥) são vermelhos; espadas (♠) e paus (♣) são pretos. */
@@ -162,7 +174,10 @@ function legalActions(state: PatienceState, playerId: string): readonly Patience
 
   state.tableau.forEach((column, fromColumn) => {
     const top = column[column.length - 1];
-    if (top !== undefined && canPlaceOnFoundation(top, state.foundations[suitIndex(top.suit)] ?? [])) {
+    if (
+      top !== undefined &&
+      canPlaceOnFoundation(top, state.foundations[suitIndex(top.suit)] ?? [])
+    ) {
       actions.push({ type: 'tableau_to_foundation', fromColumn });
     }
     for (let i = state.faceDown[fromColumn] ?? 0; i < column.length; i += 1) {
@@ -170,7 +185,8 @@ function legalActions(state: PatienceState, playerId: string): readonly Patience
       if (card === undefined) continue;
       state.tableau.forEach((target, toColumn) => {
         // Rei sozinho numa coluna vazia não é um movimento útil.
-        if (toColumn === fromColumn || (card.value === 'K' && i === 0 && target.length === 0)) return;
+        if (toColumn === fromColumn || (card.value === 'K' && i === 0 && target.length === 0))
+          return;
         if (canPlaceOnTableau(card, target)) {
           actions.push({ type: 'tableau_to_tableau', fromColumn, toColumn, cardId: card.id });
         }
@@ -182,7 +198,8 @@ function legalActions(state: PatienceState, playerId: string): readonly Patience
     const top = state.foundations[s]?.[(state.foundations[s]?.length ?? 0) - 1];
     if (top === undefined) return;
     state.tableau.forEach((column, toColumn) => {
-      if (canPlaceOnTableau(top, column)) actions.push({ type: 'foundation_to_tableau', suit, toColumn });
+      if (canPlaceOnTableau(top, column))
+        actions.push({ type: 'foundation_to_tableau', suit, toColumn });
     });
   });
 
@@ -198,7 +215,10 @@ function revealTop(faceDown: readonly number[], column: number, remaining: numbe
   return faceDown.map((n, i) => (i === column ? Math.min(n, Math.max(remaining - 1, 0)) : n));
 }
 
-function finish(state: PatienceState, events: PatienceEvent[]): ApplyResult<PatienceState, PatienceEvent> {
+function finish(
+  state: PatienceState,
+  events: PatienceEvent[],
+): ApplyResult<PatienceState, PatienceEvent> {
   const moved = { ...state, moves: state.moves + 1 };
   if (moved.foundations.reduce((sum, pile) => sum + pile.length, 0) === 52) {
     return {
@@ -226,16 +246,14 @@ function applyAction(
     case 'flip_stock': {
       if (state.stock.length === 0) {
         if (state.waste.length === 0) return fail('invalid_setup', 'Monte e descarte vazios.');
-        return finish(
-          { ...state, stock: [...state.waste].reverse(), waste: [] },
-          [{ type: 'stock_recycled' }],
-        );
+        return finish({ ...state, stock: [...state.waste].reverse(), waste: [] }, [
+          { type: 'stock_recycled' },
+        ]);
       }
       const card = state.stock[state.stock.length - 1] as PatienceCard;
-      return finish(
-        { ...state, stock: state.stock.slice(0, -1), waste: [...state.waste, card] },
-        [{ type: 'card_moved', cardId: card.id, from: 'stock', to: 'waste' }],
-      );
+      return finish({ ...state, stock: state.stock.slice(0, -1), waste: [...state.waste, card] }, [
+        { type: 'card_moved', cardId: card.id, from: 'stock', to: 'waste' },
+      ]);
     }
 
     case 'waste_to_foundation': {
@@ -260,7 +278,8 @@ function applyAction(
       const target = state.tableau[p.toColumn];
       if (card === undefined) return fail('card_not_in_hand', 'O descarte está vazio.');
       if (target === undefined) return fail('invalid_setup', 'Coluna inválida.');
-      if (!canPlaceOnTableau(card, target)) return fail('invalid_setup', 'Essa carta não cabe na coluna.');
+      if (!canPlaceOnTableau(card, target))
+        return fail('invalid_setup', 'Essa carta não cabe na coluna.');
       return finish(
         {
           ...state,
@@ -274,7 +293,8 @@ function applyAction(
     case 'tableau_to_foundation': {
       const column = state.tableau[p.fromColumn];
       const card = column?.[column.length - 1];
-      if (column === undefined || card === undefined) return fail('card_not_in_hand', 'Coluna vazia.');
+      if (column === undefined || card === undefined)
+        return fail('card_not_in_hand', 'Coluna vazia.');
       const s = suitIndex(card.suit);
       if (!canPlaceOnFoundation(card, state.foundations[s] ?? [])) {
         return fail('invalid_setup', 'Essa carta não cabe na fundação.');

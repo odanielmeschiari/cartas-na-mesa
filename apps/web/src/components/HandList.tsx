@@ -26,17 +26,17 @@ export function HandList({ hand, onPlayCard }: HandListProps) {
   }
 
   return (
-    <ul className="flex flex-wrap gap-2">
+    <ul className="flex flex-wrap gap-3">
       {hand.cards.map((card) => (
         <li key={card.cardId}>
           <button
             aria-label={card.accessibleName}
-            className="cnm-interactive flex flex-col items-center rounded-md border border-stone-500 bg-white px-3 py-2 disabled:cursor-not-allowed disabled:opacity-60"
+            className="cnm-hand-card"
             disabled={!card.playable}
             onClick={() => onPlayCard(card.cardId)}
             type="button"
           >
-            <span aria-hidden="true" className="font-semibold text-stone-900">
+            <span aria-hidden="true" className="text-lg font-bold">
               {card.label}
             </span>
             <span aria-hidden="true" className="text-xs text-stone-700">

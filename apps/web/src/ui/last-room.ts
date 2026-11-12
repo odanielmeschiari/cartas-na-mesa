@@ -14,6 +14,15 @@ import { createMemoryStorage, type KeyValueStorage } from '../client/session-sto
  */
 
 const LAST_ROOM_KEY = 'cnm:last-room';
+const LAST_ROOM_AT_KEY = 'cnm:last-room-at';
+
+/** Depois disso sem atividade, a sala salva deixa de ser oferecida para retomar. */
+export const LAST_ROOM_TTL_MS = 60 * 60 * 1000;
+
+export interface LastRoomStoreOptions {
+  readonly now?: () => number;
+  readonly ttlMs?: number;
+}
 
 /** Guarda local do código da sala em que o jogador esteve por último. */
 export interface LastRoomStore {
@@ -28,7 +37,13 @@ export interface LastRoomStore {
  * Nenhuma operação lança: um storage que falhe degrada para "não há sala
  * guardada", sem derrubar a aplicação.
  */
-export function createLastRoomStore(storage: KeyValueStorage): LastRoomStore {
+export function createLastRoomStore(
+  storage: KeyValueStorage,
+  options: LastRoomStoreOptions = {},
+): LastRoomStore {
+  const now = options.now ?? Date.now;
+  const ttlMs = options.ttlMs ?? LAST_ROOM_TTL_MS;
+
   return {
     load(): string | null {
       let raw: string | null;
@@ -48,6 +63,20 @@ export function createLastRoomStore(storage: KeyValueStorage): LastRoomStore {
         return null;
       }
 
+      // Sem data (valor antigo) vale como válido; com data vencida, esquece.
+      let savedAt: number | null;
+      try {
+        const rawAt = storage.getItem(LAST_ROOM_AT_KEY);
+        savedAt = rawAt === null ? null : Number(rawAt);
+      } catch {
+        savedAt = null;
+      }
+      if (savedAt !== null && (!Number.isFinite(savedAt) || now() - savedAt > ttlMs)) {
+        storage.removeItem(LAST_ROOM_KEY);
+        storage.removeItem(LAST_ROOM_AT_KEY);
+        return null;
+      }
+
       return roomCode;
     },
 
@@ -59,10 +88,12 @@ export function createLastRoomStore(storage: KeyValueStorage): LastRoomStore {
       }
 
       storage.setItem(LAST_ROOM_KEY, normalized);
+      storage.setItem(LAST_ROOM_AT_KEY, String(now()));
     },
 
     clear(): void {
       storage.removeItem(LAST_ROOM_KEY);
+      storage.removeItem(LAST_ROOM_AT_KEY);
     },
   };
 }
