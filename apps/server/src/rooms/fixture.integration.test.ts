@@ -1,5 +1,5 @@
 /**
- * Testes de integração do spike do servidor (ADR-001, critérios S1–S3).
+ * Testes de integração do spike do servidor (ADR-001, critérios S1–S4).
  *
  * Os testes sobem um servidor Colyseus real e conectam **dois clientes reais**
  * do SDK oficial: nada é simulado. A sala é a mesma da produção, com a seed
@@ -16,12 +16,22 @@
  * - S2: estado autoritativo; ação inválida não muda nada e o erro é só do
  *   remetente.
  * - S3: informação oculta por jogador, verificada sobre o payload bruto.
+ * - S4: reconexão após queda — o mesmo assento, a mesma mão, o mesmo estado de
+ *   turno, sem assento duplicado e com o outro jogador vendo a ausência e o
+ *   retorno.
  */
 
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import type { ColyseusSDK, Room as SdkRoom } from '@colyseus/sdk';
 import type { ColyseusTestServer } from '@colyseus/testing';
 import { matchMaker } from 'colyseus';
+import {
+  statePrivateMessageSchema,
+  statePublicMessageSchema,
+  type SeatInfo,
+  type StatePrivateMessage,
+  type StatePublicMessage,
+} from '@cartas-na-mesa/protocol';
 
 import {
   at,
@@ -45,7 +55,7 @@ import {
   TEST_TIMEOUT_ROOM_NAME,
   validateMessages,
   waitFor,
-  type TestConnection,
+  TestConnection,
 } from './fixture.integration.helper';
 
 /** Margem para as esperas por mensagem, que são o único ponto lento do teste. */
@@ -107,6 +117,87 @@ function waitForLeave(
       resolve({ code, reason });
     });
   });
+}
+
+/**
+ * `state_public` recebidos pela conexão, validados pelo schema do protocolo.
+ *
+ * O parse é tolerante de propósito: uma mensagem fora do contrato é ignorada
+ * em vez de estourar, para que a espera nunca lance dentro do predicado.
+ */
+function publicStates(connection: TestConnection): StatePublicMessage[] {
+  const states: StatePublicMessage[] = [];
+  for (const raw of connection.messages.state_public) {
+    const parsed = statePublicMessageSchema.safeParse(raw);
+    if (parsed.success) {
+      states.push(parsed.data);
+    }
+  }
+  return states;
+}
+
+/** `state_private` recebidos pela conexão, validados pelo schema do protocolo. */
+function privateStates(connection: TestConnection): StatePrivateMessage[] {
+  const views: StatePrivateMessage[] = [];
+  for (const raw of connection.messages.state_private) {
+    const parsed = statePrivateMessageSchema.safeParse(raw);
+    if (parsed.success) {
+      views.push(parsed.data);
+    }
+  }
+  return views;
+}
+
+/**
+ * Assento do jogador no `state_public`, com erro descritivo quando o assento
+ * não está na lista.
+ */
+function seatOf(state: StatePublicMessage, playerId: string): SeatInfo {
+  const seat = state.seats.find((candidate) => candidate.playerId === playerId);
+  if (seat === undefined) {
+    throw new Error(
+      `O "state_public" não traz assento para o jogador "${playerId}" ` +
+        `(assentos: ${state.seats.map((candidate) => candidate.seatIndex).join(', ')}).`,
+    );
+  }
+  return seat;
+}
+
+/**
+ * Abre uma nova conexão na sala, repetindo o pedido de matchmaking até que a
+ * vaga de conexão do Colyseus seja liberada.
+ *
+ * A conexão ainda não se identifica: quem assume a sessão de jogo é a
+ * mensagem `reconnect`, enviada depois.
+ */
+async function openReconnectConnection(roomCode: string): Promise<SdkRoom> {
+  let room: SdkRoom | undefined;
+  let lastError: unknown;
+
+  try {
+    await waitFor(async () => {
+      try {
+        room = await joinWithoutIdentity(sdk, roomCode);
+        return true;
+      } catch (error) {
+        // A vaga de conexão ainda não foi liberada: a espera é reavaliada.
+        lastError = error;
+        return false;
+      }
+    }, `a conexão de reconexão ser aceita na sala "${roomCode}"`);
+  } catch (error) {
+    throw new Error(
+      `Não foi possível reconectar na sala "${roomCode}": ` +
+        `${lastError instanceof Error ? lastError.message : String(error)}`,
+      { cause: error },
+    );
+  }
+
+  if (room === undefined) {
+    throw new Error(`Não foi possível reconectar na sala "${roomCode}".`);
+  }
+
+  return room;
 }
 
 describe('S1 — duas conexões na mesma sala', () => {
@@ -589,6 +680,180 @@ describe('Reconexão — uma sessão por conexão', () => {
       expect(guestView.view.playerId).toBe(guestAccepted.playerId);
       expect(guestView.view.hand).toHaveLength(2);
       expect(lastStatePublic(guest)).toEqual(lastStatePublic(host));
+    },
+    TEST_TIMEOUT_MS,
+  );
+});
+
+describe('S4 — reconexão após queda', () => {
+  it(
+    'reconecta ao mesmo assento, com a mesma mão e o mesmo estado de turno, sem assento duplicado',
+    async () => {
+      const { host, guest, hostAccepted, guestAccepted, matchId, roomCode } = await setupMatch(sdk);
+
+      // Estado da partida antes da queda: a mão de Ana, o turno e a versão.
+      const privateBefore = lastStatePrivate(host);
+      const publicBefore = lastStatePublic(host);
+      const guestHandBefore = lastStatePrivate(guest).view.hand;
+
+      expect(privateBefore.view.playerId).toBe(hostAccepted.playerId);
+      expect(privateBefore.view.hand).toHaveLength(2);
+      expect(publicBefore.version).toBe(0);
+      expect(publicBefore.game.currentTurnPlayerId).toBe(hostAccepted.playerId);
+      expect(publicBefore.seats).toHaveLength(2);
+      expect(publicBefore.seats.every((seat) => seat.connected)).toBe(true);
+
+      // A conexão de Ana é encerrada. Para o servidor, uma queda e uma saída
+      // solicitada chegam pelo mesmo caminho (`onLeave`): a sessão de jogo é
+      // desvinculada e a presença é republicada.
+      const hostLeave = waitForLeave(host.room);
+      await host.room.leave();
+      await hostLeave;
+
+      // Bia observa Ana ausente: o assento é preservado, a presença não.
+      await guest.waitFor(
+        () =>
+          publicStates(guest).some(
+            (state) =>
+              state.seats.length === 2 &&
+              state.seats.some(
+                (seat) => seat.playerId === hostAccepted.playerId && seat.connected === false,
+              ),
+          ),
+        'Bia observar Ana ausente no "state_public"',
+      );
+
+      const absentStates = publicStates(guest).filter(
+        (state) =>
+          state.seats.length === 2 &&
+          state.seats.some(
+            (seat) => seat.playerId === hostAccepted.playerId && seat.connected === false,
+          ),
+      );
+      const absentState = at(
+        absentStates,
+        absentStates.length - 1,
+        'o "state_public" com Ana ausente',
+      );
+
+      // O assento de Ana continua na sala, com o mesmo jogador e o mesmo
+      // lugar; só a presença mudou.
+      expect(absentState.seats).toHaveLength(2);
+      expect(absentState.seats.map((seat) => seat.seatIndex)).toEqual([0, 1]);
+      expect(seatOf(absentState, hostAccepted.playerId).connected).toBe(false);
+      expect(seatOf(absentState, hostAccepted.playerId).seatIndex).toBe(hostAccepted.seatIndex);
+      expect(seatOf(absentState, guestAccepted.playerId).connected).toBe(true);
+
+      // A queda não alterou a partida: mesma versão, mesmo turno, mesma mesa.
+      expect(absentState.version).toBe(publicBefore.version);
+      expect(absentState.game.currentTurnPlayerId).toBe(publicBefore.game.currentTurnPlayerId);
+      expect(absentState.game.table).toEqual(publicBefore.game.table);
+
+      // Ana volta: nova conexão, mesmo código de sala, mesmo token de sessão.
+      const reconnectRoom = await openReconnectConnection(roomCode);
+      const reconnected = new TestConnection(reconnectRoom);
+      reconnectRoom.send('reconnect', {
+        type: 'reconnect',
+        roomCode,
+        sessionToken: hostAccepted.sessionToken,
+      });
+
+      await reconnected.waitFor(
+        () => reconnected.messages.join_accepted.length > 0,
+        'o "join_accepted" da reconexão',
+      );
+
+      const reaccepted = at(
+        validateMessages(reconnected.messages).join_accepted,
+        0,
+        'join_accepted da reconexão',
+      );
+
+      // Mesma identidade, mesmo assento e mesmo token de sessão.
+      expect(reaccepted.playerId).toBe(hostAccepted.playerId);
+      expect(reaccepted.seatIndex).toBe(hostAccepted.seatIndex);
+      expect(reaccepted.sessionToken).toBe(hostAccepted.sessionToken);
+      expect(reaccepted.matchId).toBe(hostAccepted.matchId);
+      expect(reaccepted.roomCode).toBe(roomCode);
+
+      await reconnected.waitFor(
+        () => publicStates(reconnected).length > 0 && privateStates(reconnected).length > 0,
+        'o estado público e a visão privada da reconexão',
+      );
+
+      const privateAfter = lastStatePrivate(reconnected);
+      const publicAfter = lastStatePublic(reconnected);
+
+      // A mesma mão: mesmas cartas, mesma ordem.
+      expect(privateAfter.view.playerId).toBe(hostAccepted.playerId);
+      expect(privateAfter.view.hand).toEqual(privateBefore.view.hand);
+
+      // O mesmo estado de turno e a mesma versão: a queda não mexeu na partida.
+      expect(publicAfter.version).toBe(publicBefore.version);
+      expect(publicAfter.game.currentTurnPlayerId).toBe(publicBefore.game.currentTurnPlayerId);
+      expect(publicAfter.game.table).toEqual(publicBefore.game.table);
+      expect(publicAfter.game.handSizes).toEqual(publicBefore.game.handSizes);
+
+      // A sala continua com 2 jogadores e sem assento duplicado.
+      expect(publicAfter.seats).toHaveLength(2);
+      expect(publicAfter.seats.map((seat) => seat.seatIndex)).toEqual([0, 1]);
+      expect(new Set(publicAfter.seats.map((seat) => seat.playerId)).size).toBe(2);
+      expect(new Set(publicAfter.seats.map((seat) => seat.seatIndex)).size).toBe(2);
+      expect(seatOf(publicAfter, hostAccepted.playerId).connected).toBe(true);
+      expect(seatOf(publicAfter, guestAccepted.playerId).connected).toBe(true);
+
+      // Bia observa Ana presente de novo.
+      await guest.waitFor(
+        () =>
+          publicStates(guest).some(
+            (state) =>
+              state.seats.length === 2 &&
+              state.seats.some(
+                (seat) => seat.playerId === hostAccepted.playerId && seat.connected === true,
+              ),
+          ),
+        'Bia observar Ana presente de novo no "state_public"',
+      );
+
+      const presentStates = publicStates(guest).filter(
+        (state) =>
+          state.seats.length === 2 &&
+          state.seats.some(
+            (seat) => seat.playerId === hostAccepted.playerId && seat.connected === true,
+          ),
+      );
+      const presentState = at(
+        presentStates,
+        presentStates.length - 1,
+        'o "state_public" com Ana presente de novo',
+      );
+
+      expect(presentState.seats).toHaveLength(2);
+      expect(presentState.seats.map((seat) => seat.seatIndex)).toEqual([0, 1]);
+      expect(seatOf(presentState, hostAccepted.playerId).connected).toBe(true);
+      expect(presentState.version).toBe(publicBefore.version);
+      expect(presentState.game.currentTurnPlayerId).toBe(publicBefore.game.currentTurnPlayerId);
+
+      // A sessão da Bia não foi trocada: ela continua com a própria mão, e a
+      // mão dela não vazou para a conexão reconectada da Ana.
+      expect(lastStatePrivate(guest).view.playerId).toBe(guestAccepted.playerId);
+      expect(lastStatePrivate(guest).view.hand).toEqual(guestHandBefore);
+      expect(payloadValuesMatching(reconnected.messages, guestHandBefore)).toEqual([]);
+
+      // Barreira de sincronização: a partida continua jogável depois da
+      // reconexão, e os dois clientes convergem para o mesmo estado.
+      const cardId = at(lastStatePrivate(reconnected).view.hand, 0, 'a mão de Ana reconectada');
+      playCard(reconnected, matchId, publicAfter.version, cardId);
+
+      await awaitStateVersion(reconnected, 1);
+      await awaitStateVersion(guest, 1);
+
+      expect(lastStatePublic(reconnected).version).toBe(publicBefore.version + 1);
+      expect(lastStatePublic(reconnected).game.table).toEqual([
+        { playerId: hostAccepted.playerId, cardId },
+      ]);
+      expect(lastStatePublic(guest).game.table).toEqual(lastStatePublic(reconnected).game.table);
+      expect(lastStatePublic(guest)).toEqual(lastStatePublic(reconnected));
     },
     TEST_TIMEOUT_MS,
   );
