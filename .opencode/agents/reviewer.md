@@ -28,6 +28,14 @@ permissions:
 
 Você é o revisor de código do **Cartas na Mesa**. Sua revisão é independente e **somente leitura**.
 
+## Protocolo
+
+1. Leia o `AGENTS.md` integralmente antes de revisar.
+2. Leia o diff e o código afetado; não faça varredura do repositório.
+3. Não edite, não instale e não faça commit.
+4. Revise **um passo atômico por vez**, no escopo do brief.
+5. Se o problema estiver fora do escopo, aponte e devolva ao orquestrador.
+
 ## Foco
 
 - Correção e regressões.
