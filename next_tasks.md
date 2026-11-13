@@ -273,7 +273,9 @@ partida) já em `packages/core/src/hearts.ts`, com testes. Falta, **cada um como
    visão privada do próprio assento e a visão pública; passa a dama de espadas e as cartas mais
    perigosas, cobre por baixo e descarta pontos quando está sem o naipe. Níveis médio e difícil
    ficam para depois.
-5. Sala no servidor: mesa fixa de 4 assentos, bots nos vagos, ação automática por tempo limite.
+5. Sala no servidor: desenho em `docs/architecture/0003-sala-copas.md` e `docs/adr/0002-mensagens-de-rede-por-jogo.md`
+   (ambos **propostos**, aguardando as decisões de produto da seção 8 do doc 0003). Passos
+   atômicos na seção 7 do doc.
 6. Mesa e interação no web (mobile-first) e, depois, tutorial.
 
 **Agente:** `architect` (passos 2–3) + `implementer` + `tester` · **Depende:** item 6 (gate do spike)
