@@ -52,7 +52,7 @@ export interface GameRoomAdapter<S, A, P, V, R, E> {
   readonly chooseBotAction?: (own: V, table: P) => A | null;
 }
 
-type FixtureState = ReturnType<typeof fixtureGame.createInitialState>;
+export type FixtureState = ReturnType<typeof fixtureGame.createInitialState>;
 
 export const fixtureAdapter: GameRoomAdapter<
   FixtureState,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  actionIntentEnvelopeSchema,
   anyGameActionIntentMessageSchema,
   anyGameEventsMessageSchema,
   anyGameStatePrivateMessageSchema,
@@ -156,6 +157,25 @@ describe('action_intent por jogo', () => {
     expect(
       anyGameActionIntentMessageSchema.safeParse({ ...envelope, action: { ...play, playerId: 'x' } })
         .success,
+    ).toBe(false);
+  });
+});
+
+describe('envelope de action_intent', () => {
+  const envelope = { type: 'action_intent', matchId: 'm1', stateVersion: 0 };
+
+  it('aceita qualquer ação e deixa a validação para o jogo', () => {
+    expect(actionIntentEnvelopeSchema.safeParse({ ...envelope, action: { type: 'x' } }).success).toBe(
+      true,
+    );
+  });
+
+  it('continua exigindo matchId, versão e rejeitando campo extra', () => {
+    expect(actionIntentEnvelopeSchema.safeParse({ type: 'action_intent', action: {} }).success).toBe(
+      false,
+    );
+    expect(
+      actionIntentEnvelopeSchema.safeParse({ ...envelope, action: {}, playerId: 'x' }).success,
     ).toBe(false);
   });
 });

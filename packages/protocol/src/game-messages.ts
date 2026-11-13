@@ -21,6 +21,12 @@ import {
 // A união é `z.union`, e não `discriminatedUnion`: `play_card` e `card_played` existem nos dois
 // jogos. Quem hospeda um jogo revalida o campo com o schema do próprio jogo (ADR-002, item 2).
 
+// Envelope de `action_intent` sem o jogo: a sala o confere primeiro e depois revalida `action`
+// com o schema do próprio jogo (ADR-002, item 2).
+export const actionIntentEnvelopeSchema = actionIntentMessageSchema.extend({
+  action: z.unknown(),
+});
+
 export const heartsActionIntentMessageSchema = actionIntentMessageSchema.extend({
   action: heartsActionPayloadSchema,
 });
@@ -57,6 +63,7 @@ export const anyGameEventsMessageSchema = z.union([
   heartsEventsMessageSchema,
 ]);
 
+export type ActionIntentEnvelope = z.infer<typeof actionIntentEnvelopeSchema>;
 export type HeartsActionIntentMessage = z.infer<typeof heartsActionIntentMessageSchema>;
 export type HeartsStatePublicMessage = z.infer<typeof heartsStatePublicMessageSchema>;
 export type HeartsStatePrivateMessage = z.infer<typeof heartsStatePrivateMessageSchema>;
