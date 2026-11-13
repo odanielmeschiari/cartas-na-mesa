@@ -29,6 +29,7 @@ import {
 
 import { createGameServer } from '../server';
 import { SeededFixtureRoom, ShortTimeoutFixtureRoom } from './fixture.test-helper';
+import { SeededHeartsRoom } from './hearts.test-helper';
 
 /**
  * Nome da sala de teste. Diferente do nome de produção de propósito: nenhum
@@ -41,6 +42,9 @@ export const TEST_ROOM_NAME = 'fixture-test';
  * produção: nenhum cliente real pode alcançar a sala com prazo curto.
  */
 export const TEST_TIMEOUT_ROOM_NAME = 'fixture-timeout-test';
+
+/** Nome da sala de teste do Copas, com seed fixa. Também distinto do nome de produção. */
+export const TEST_HEARTS_ROOM_NAME = 'hearts-test';
 
 /** Tempo máximo de espera por uma mensagem. */
 export const WAIT_TIMEOUT_MS = 5_000;
@@ -192,14 +196,15 @@ export async function closeAllConnections(): Promise<void> {
 }
 
 /**
- * Sobe o servidor Colyseus real com as salas de teste: a de seed fixa e a de
- * prazo de identidade curto. Os dois nomes são distintos do nome de produção.
+ * Sobe o servidor Colyseus real com as salas de teste: a de seed fixa, a de
+ * prazo de identidade curto e a do Copas. Os nomes são distintos dos de produção.
  */
 export async function startTestServer(): Promise<ColyseusTestServer> {
   const server = createGameServer({
     roomTypes: {
       [TEST_ROOM_NAME]: SeededFixtureRoom,
       [TEST_TIMEOUT_ROOM_NAME]: ShortTimeoutFixtureRoom,
+      [TEST_HEARTS_ROOM_NAME]: SeededHeartsRoom,
     },
   });
   return boot(server);

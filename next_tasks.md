@@ -275,7 +275,10 @@ partida) já em `packages/core/src/hearts.ts`, com testes. Falta, **cada um como
    ficam para depois.
 5. Sala no servidor: desenho em `docs/architecture/0003-sala-copas.md` e `docs/adr/0002-mensagens-de-rede-por-jogo.md`
    (ambos **propostos**, aguardando as decisões de produto da seção 8 do doc 0003). Passos
-   atômicos na seção 7 do doc.
+   atômicos na seção 7 do doc. **Feitos:** contrato (passo 2), sala genérica (passo 3), `HeartsRoom`
+   para 4 humanos (passo 4) e a distribuição da mão seguinte pela sala (`GameRoomAdapter.advance`,
+   doc 0003 §5). **Próximos:** início pelo dono e bots nos assentos vagos (passo 5), tempo limite e
+   pausa sem humanos (passo 6) e o gate (passo 7).
 6. Mesa e interação no web (mobile-first) e, depois, tutorial.
 
 **Agente:** `architect` (passos 2–3) + `implementer` + `tester` · **Depende:** item 6 (gate do spike)

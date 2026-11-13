@@ -33,6 +33,12 @@ const MAX_ROOM_CODE_ATTEMPTS = 5;
  */
 const IDENTITY_TIMEOUT_MS = 30_000;
 
+/**
+ * Pausa antes de a sala avançar um estado parado (ex.: fim de mão do Copas), para os jogadores
+ * verem o placar. 5 s é o padrão proposto no doc 0003 §8 (decisão 2), ainda a confirmar.
+ */
+const ADVANCE_PAUSE_MS = 5_000;
+
 /** Timeout agendado no relógio da sala; cancelado por `clear()`. */
 type ScheduledTimeout = ReturnType<Room['clock']['setTimeout']>;
 
@@ -108,6 +114,9 @@ export abstract class GameRoom<S, A, P, V, R, E> extends Room {
   /** Prazo de identidade pendente, por `sessionId` da conexão Colyseus. */
   private readonly identityTimeouts = new Map<string, ScheduledTimeout>();
 
+  /** Avanço agendado (`adapter.advance`); no máximo um por vez. */
+  private advanceTimeout: ScheduledTimeout | null = null;
+
   override async onCreate(): Promise<void> {
     this.roomCode = await this.generateRoomCode();
 
@@ -145,6 +154,16 @@ export abstract class GameRoom<S, A, P, V, R, E> extends Room {
     }, this.identityTimeoutMs());
 
     this.identityTimeouts.set(client.sessionId, delayed);
+  }
+
+  /** Pausa antes de avançar um estado parado. Costura de teste, como `identityTimeoutMs`. */
+  protected advancePauseMs(): number {
+    return ADVANCE_PAUSE_MS;
+  }
+
+  override onDispose(): void {
+    this.advanceTimeout?.clear();
+    this.advanceTimeout = null;
   }
 
   /**
@@ -377,6 +396,49 @@ export abstract class GameRoom<S, A, P, V, R, E> extends Room {
 
     this.publishEvents(result.events);
     this.publishState();
+    this.scheduleAdvance();
+  }
+
+  /**
+   * Agenda o avanço que o motor não faz sozinho, se o estado estiver parado esperando por ele. A
+   * pausa dá tempo de os jogadores verem o resultado antes de o estado mudar.
+   */
+  private scheduleAdvance(): void {
+    const advance = this.adapter.advance;
+    if (advance === undefined || this.gameState === null || this.advanceTimeout !== null) {
+      return;
+    }
+    if (!advance.isPending(this.gameState)) {
+      return;
+    }
+
+    this.advanceTimeout = this.clock.setTimeout(() => {
+      this.advanceTimeout = null;
+      this.runAdvance();
+    }, this.advancePauseMs());
+  }
+
+  private runAdvance(): void {
+    const advance = this.adapter.advance;
+    const gameState = this.gameState;
+    if (advance === undefined || gameState === null || !advance.isPending(gameState)) {
+      return;
+    }
+
+    try {
+      this.gameState = advance.apply(gameState, this.createRng());
+    } catch (error) {
+      // Sem o roomCode no log: ele é a credencial de acesso à sala (ver `seatPlayer`).
+      console.error(
+        `[${this.matchId}] falha ao avançar a partida:`,
+        error instanceof Error ? error.message : String(error),
+      );
+      return;
+    }
+
+    this.version += 1;
+    this.publishState();
+    this.scheduleAdvance();
   }
 
   /**

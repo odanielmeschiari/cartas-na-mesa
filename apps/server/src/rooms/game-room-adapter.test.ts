@@ -15,6 +15,7 @@ describe('fixtureAdapter', () => {
     expect(fixtureAdapter.game.id).toBe('fixture');
     expect(fixtureAdapter.fillWithBots).toBe(false);
     expect(fixtureAdapter.chooseBotAction).toBeUndefined();
+    expect(fixtureAdapter.advance).toBeUndefined();
   });
 
   it('o schema da ação só aceita ações do fixture', () => {
@@ -75,5 +76,44 @@ describe('heartsAdapter', () => {
       game: heartsAdapter.game.publicView(state),
     };
     expect(heartsAdapter.messages.statePublic.safeParse(message).success).toBe(true);
+  });
+
+  it('o avanço distribui a próxima mão só depois do fim da mão', () => {
+    const { game, advance, chooseBotAction } = heartsAdapter;
+    if (advance === undefined || chooseBotAction === undefined) {
+      throw new Error('O adaptador do Copas deveria ter avanço e bot.');
+    }
+
+    let state = game.createInitialState(heartsPlayers, createSeededRng(7));
+    expect(advance.isPending(state)).toBe(false);
+
+    // Os quatro assentos jogam com o bot até a mão acabar: 4 passes + 52 jogadas.
+    for (let step = 0; state.phase !== 'hand_over'; step += 1) {
+      if (step >= 200) {
+        throw new Error('A mão não terminou em 200 passos.');
+      }
+      const current = state;
+      const move = heartsPlayers.flatMap(({ playerId }) => {
+        const action = chooseBotAction(game.viewFor(current, playerId), game.publicView(current));
+        return action === null ? [] : [{ playerId, payload: action }];
+      })[0];
+      if (move === undefined) {
+        throw new Error('Nenhum assento tem ação legal, mas a mão não terminou.');
+      }
+      const result = game.applyAction(current, move);
+      if (!result.ok) {
+        throw new Error(result.error.message);
+      }
+      state = result.state;
+    }
+
+    expect(advance.isPending(state)).toBe(true);
+
+    const next = advance.apply(state, createSeededRng(8));
+    expect(next.phase).toBe('passing');
+    expect(next.handIndex).toBe(1);
+    expect(next.totals).toEqual(state.totals);
+    expect(next.hands.map((hand) => hand.length)).toEqual([13, 13, 13, 13]);
+    expect(advance.isPending(next)).toBe(false);
   });
 });

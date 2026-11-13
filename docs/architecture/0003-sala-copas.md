@@ -62,7 +62,9 @@ público, do privado de cada humano e dos eventos.
 
 - `applyAction` não recebe `Rng`; ao fim da mão o estado fica em `hand_over`. Depois de uma pausa
   curta para os jogadores verem a pontuação, a sala chama `startNextHand(state, rng)`, incrementa
-  `version` e publica.
+  `version` e publica. **Implementado** como `GameRoomAdapter.advance` (`isPending` + `apply`): a
+  sala genérica agenda o avanço no `clock` depois de cada ação, com a pausa em `advancePauseMs()`
+  (5 s; o teste a encurta). A mudança de mão sai só como novo `state_public`, sem evento.
 - **`Rng` de produção:** um adaptador fino sobre `randomUint32` (`apps/server/src/rooms/random.ts`),
   isto é, CSPRNG direto, **sem seed de 32 bits**. Isso evita a pendência A3 para o Copas: a mão
   oculta nunca depende de um PRNG de seed pequena. **Implementado** como `createCryptoRng` em
@@ -88,7 +90,7 @@ público, do privado de cada humano e dos eventos.
 | 1 | Aprovar ADR-002 e as decisões da seção 8 | usuário | Decisões registradas |
 | 2 | Contrato: união (`z.union`) por jogo e `SeatInfo.kind` em `packages/protocol` (**feito**: `SeatInfo.kind` e `game-messages.ts`; os schemas do fixture mantêm o nome) | `implementer` + `tester` | Testes de contrato do fixture e do Copas passam |
 | 3 | Generalizar `FixtureRoom` em sala por adaptador, sem mudar comportamento (**feito**: `GameRoom` genérica em `game-room.ts`; `FixtureRoom` é uma subclasse fina com `createRng` por seed) | `implementer` + `tester` | S1–S4 e regressões do fixture iguais |
-| 4 | `HeartsRoom`: mesa de 4, início, ação humana e `createRng` | `implementer` + `tester` | Partida só com humanos, com S3 por payload bruto |
+| 4 | `HeartsRoom`: mesa de 4, início, ação humana e `createRng` (**feito**: `apps/server/src/rooms/hearts.ts`, registrada como `hearts`; testes em `hearts.integration.test.ts`) | `implementer` + `tester` | Partida só com humanos, com S3 por payload bruto |
 | 5 | Bots nos assentos vagos e agendamento da jogada | `implementer` + `tester` | Partida completa com 1 humano e 3 bots |
 | 6 | Tempo limite e ação automática; pausa sem humanos | `implementer` + `tester` | Ausência não trava a partida |
 | 7 | Gate: `reviewer` + `security` sobre a sala do Copas | `reviewer`, `security` | Zero achados bloqueantes |

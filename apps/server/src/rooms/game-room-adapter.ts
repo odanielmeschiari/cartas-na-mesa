@@ -2,6 +2,7 @@ import {
   chooseEasyAction,
   fixtureGame,
   heartsGame,
+  startNextHand,
   type FixtureActionPayload,
   type FixtureEvent,
   type FixturePrivateView,
@@ -14,6 +15,7 @@ import {
   type HeartsResult,
   type HeartsState,
   type MatchResult,
+  type Rng,
 } from '@cartas-na-mesa/core';
 import {
   actionIntentMessageSchema,
@@ -41,11 +43,23 @@ export interface GameMessageSchemas {
   readonly events: ZodType;
 }
 
+/**
+ * Transição que o motor não faz sozinho porque `applyAction` não recebe `Rng` (ex.: distribuir a
+ * próxima mão do Copas). A sala a executa depois de uma pausa, com o `Rng` da própria sala.
+ */
+export interface GameAdvance<S> {
+  /** O estado está parado esperando a sala avançar? */
+  readonly isPending: (state: S) => boolean;
+  readonly apply: (state: S, rng: Rng) => S;
+}
+
 export interface GameRoomAdapter<S, A, P, V, R, E> {
   readonly game: GameDefinition<S, A, P, V, R, E>;
   /** Revalida a ação depois do envelope: uma ação de outro jogo falha com `invalid_payload`. */
   readonly actionSchema: ZodType<A>;
   readonly messages: GameMessageSchemas;
+  /** Ausente nos jogos cujo motor avança só com ações de jogadores. */
+  readonly advance?: GameAdvance<S>;
   /** O jogo aceita bots nos assentos vagos. */
   readonly fillWithBots: boolean;
   /** Só enxerga a visão do próprio assento e a pública, nunca o estado completo. */
@@ -88,6 +102,10 @@ export const heartsAdapter: GameRoomAdapter<
     statePublic: heartsStatePublicMessageSchema,
     statePrivate: heartsStatePrivateMessageSchema,
     events: heartsEventsMessageSchema,
+  },
+  advance: {
+    isPending: (state) => state.phase === 'hand_over',
+    apply: startNextHand,
   },
   fillWithBots: true,
   chooseBotAction: chooseEasyAction,
