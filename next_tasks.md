@@ -265,7 +265,10 @@ partida) já em `packages/core/src/hearts.ts`, com testes. Falta, **cada um como
    chamada por quem hospeda a partida, porque `applyAction` não recebe `Rng`; o servidor deve
    chamá-la com o CSPRNG quando a fase for `hand_over`. O motor reaproveita os códigos de erro
    existentes (jogada ilegal vira `invalid_setup`, como na Paciência); um código próprio pede ADR.
-3. Contratos em `packages/protocol` (ações `pass_cards`/`play_card`, visões pública e privada).
+3. ~~Contratos em `packages/protocol`~~ — **feito** em `packages/protocol/src/hearts.ts` (ações
+   `pass_cards`/`play_card`, visões pública e privada, eventos e resultado), validado contra as
+   saídas reais do motor numa partida completa. **Pendente:** `action_intent` ainda usa o schema do
+   fixture; trocar por um schema por jogo muda o contrato de rede e pede ADR.
 4. Bot fácil (heurística) usando só a visão do próprio assento.
 5. Sala no servidor: mesa fixa de 4 assentos, bots nos vagos, ação automática por tempo limite.
 6. Mesa e interação no web (mobile-first) e, depois, tutorial.
