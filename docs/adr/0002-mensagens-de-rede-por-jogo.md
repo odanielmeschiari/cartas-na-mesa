@@ -32,6 +32,16 @@ salas conheça jogo específico.
    servidor mapeia para `internal` (contrato §5); se o cliente precisar distinguir "jogada
    ilegal" de erro interno, um código `illegal_action` entra em ADR próprio.
 
+## Estado da implementação
+
+- `SeatInfo.kind` (item 4): feito em `packages/protocol/src/views.ts`.
+- Itens 1–3: `packages/protocol/src/game-messages.ts` traz os schemas do Copas e as uniões
+  `anyGame*MessageSchema`. Os schemas sem prefixo em `server-messages.ts` e `client-messages.ts`
+  **continuam sendo os do fixture**, de propósito: o cliente do spike e os testes de integração
+  dependem dos tipos do fixture, e trocar esses nomes por uniões alargaria os tipos de todos eles.
+  Cada sala usa o schema do próprio jogo (`GameRoomAdapter.messages`) e a borda genérica usa a união.
+- Adaptadores: `apps/server/src/rooms/game-room-adapter.ts` (`fixtureAdapter`, `heartsAdapter`).
+
 ## Alternativas consideradas
 
 - **Um schema de mensagem por jogo** (`action_intent_hearts`, ...): multiplica tipos de mensagem

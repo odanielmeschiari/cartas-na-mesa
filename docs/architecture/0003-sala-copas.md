@@ -86,8 +86,8 @@ público, do privado de cada humano e dos eventos.
 | # | Passo | Agente | Pronto quando |
 | --- | --- | --- | --- |
 | 1 | Aprovar ADR-002 e as decisões da seção 8 | usuário | Decisões registradas |
-| 2 | Contrato: união (`z.union`) por jogo e `SeatInfo.kind` em `packages/protocol` (**`SeatInfo.kind` feito**; falta a união, que alarga os tipos usados pelo cliente web do spike) | `implementer` + `tester` | Testes de contrato do fixture e do Copas passam |
-| 3 | Generalizar `FixtureRoom` em sala por adaptador, sem mudar comportamento | `implementer` + `tester` | S1–S4 e regressões do fixture iguais |
+| 2 | Contrato: união (`z.union`) por jogo e `SeatInfo.kind` em `packages/protocol` (**feito**: `SeatInfo.kind` e `game-messages.ts`; os schemas do fixture mantêm o nome) | `implementer` + `tester` | Testes de contrato do fixture e do Copas passam |
+| 3 | Generalizar `FixtureRoom` em sala por adaptador, sem mudar comportamento (**interface e adaptadores feitos** em `game-room-adapter.ts`; falta a sala usá-los) | `implementer` + `tester` | S1–S4 e regressões do fixture iguais |
 | 4 | `HeartsRoom`: mesa de 4, início, ação humana e `createRng` | `implementer` + `tester` | Partida só com humanos, com S3 por payload bruto |
 | 5 | Bots nos assentos vagos e agendamento da jogada | `implementer` + `tester` | Partida completa com 1 humano e 3 bots |
 | 6 | Tempo limite e ação automática; pausa sem humanos | `implementer` + `tester` | Ausência não trava a partida |

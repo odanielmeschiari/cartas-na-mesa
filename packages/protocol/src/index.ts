@@ -1,6 +1,7 @@
 export * from './actions';
 export * from './client-messages';
 export * from './errors';
+export * from './game-messages';
 export * from './hearts';
 export * from './scalars';
 export * from './server-messages';
