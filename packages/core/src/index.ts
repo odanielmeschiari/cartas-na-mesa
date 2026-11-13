@@ -79,3 +79,4 @@ export {
   type HeartsResult,
   type HeartsState,
 } from './hearts-game';
+export { chooseEasyAction } from './hearts-bot';

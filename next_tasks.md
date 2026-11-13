@@ -269,7 +269,10 @@ partida) já em `packages/core/src/hearts.ts`, com testes. Falta, **cada um como
    `pass_cards`/`play_card`, visões pública e privada, eventos e resultado), validado contra as
    saídas reais do motor numa partida completa. **Pendente:** `action_intent` ainda usa o schema do
    fixture; trocar por um schema por jogo muda o contrato de rede e pede ADR.
-4. Bot fácil (heurística) usando só a visão do próprio assento.
+4. ~~Bot fácil~~ — **feito** em `packages/core/src/hearts-bot.ts` (`chooseEasyAction`): usa só a
+   visão privada do próprio assento e a visão pública; passa a dama de espadas e as cartas mais
+   perigosas, cobre por baixo e descarta pontos quando está sem o naipe. Níveis médio e difícil
+   ficam para depois.
 5. Sala no servidor: mesa fixa de 4 assentos, bots nos vagos, ação automática por tempo limite.
 6. Mesa e interação no web (mobile-first) e, depois, tutorial.
 
