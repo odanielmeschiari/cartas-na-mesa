@@ -1,3 +1,4 @@
+import { shuffle } from '@cartas-na-mesa/core';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -6,6 +7,7 @@ import {
   MIN_ROOM_CODE_LENGTH,
   ROOM_CODE_ALPHABET,
   SESSION_TOKEN_BYTES,
+  createCryptoRng,
   cryptoRandomBytes,
   randomRoomCode,
   randomSessionToken,
@@ -209,5 +211,34 @@ describe('randomSessionToken', () => {
     const token = randomSessionToken();
     expect(token).toHaveLength(43);
     expect(token).toMatch(/^[A-Za-z0-9_-]+$/);
+  });
+});
+
+describe('createCryptoRng', () => {
+  it('consome 4 bytes novos da fonte a cada chamada', () => {
+    const rng = createCryptoRng(sequenceSource([0, 0, 0, 1, 0, 0, 1, 0]));
+    expect(rng.nextUint32()).toBe(1);
+    expect(rng.nextUint32()).toBe(256);
+  });
+
+  it('não guarda estado: duas instâncias sobre a mesma fonte fixa coincidem', () => {
+    const first = createCryptoRng(fixedSource([1, 2, 3, 4]));
+    const second = createCryptoRng(fixedSource([1, 2, 3, 4]));
+    expect(first.nextUint32()).toBe(second.nextUint32());
+    expect(first.nextUint32()).toBe(0x01020304);
+  });
+
+  it('usa o CSPRNG quando nenhuma fonte é informada', () => {
+    const value = createCryptoRng().nextUint32();
+    expect(Number.isInteger(value)).toBe(true);
+    expect(value).toBeGreaterThanOrEqual(0);
+    expect(value).toBeLessThan(0x1_0000_0000);
+  });
+
+  it('serve de Rng para o embaralhamento do core sem perder cartas', () => {
+    const items = Array.from({ length: 52 }, (_, index) => index);
+    const shuffled = shuffle(items, createCryptoRng());
+    expect(shuffled).toHaveLength(52);
+    expect([...shuffled].sort((left, right) => left - right)).toEqual(items);
   });
 });

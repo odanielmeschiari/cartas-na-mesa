@@ -10,11 +10,14 @@ import {
 } from './scalars';
 
 // Objetos são strict para que campos desconhecidos (ex.: a mão) falhem na validação.
+export const seatKindSchema = z.enum(['human', 'bot']);
+
 export const seatInfoSchema = z.strictObject({
   playerId: playerIdSchema,
   seatIndex: seatIndexSchema,
   nickname: nicknameSchema,
   avatarId: avatarIdSchema,
+  kind: seatKindSchema,
   connected: z.boolean(),
 });
 
@@ -67,6 +70,7 @@ export const gameEventSchema = z.discriminatedUnion('type', [
   }),
 ]);
 
+export type SeatKind = z.infer<typeof seatKindSchema>;
 export type SeatInfo = z.infer<typeof seatInfoSchema>;
 export type MatchResult = z.infer<typeof matchResultSchema>;
 export type FixturePublicView = z.infer<typeof fixturePublicViewSchema>;

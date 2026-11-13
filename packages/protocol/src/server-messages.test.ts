@@ -16,6 +16,7 @@ const seats = [
     seatIndex: 0,
     nickname: 'Ana',
     avatarId: null,
+    kind: 'human',
     connected: true,
   },
   {
@@ -23,6 +24,7 @@ const seats = [
     seatIndex: 1,
     nickname: 'Beto',
     avatarId: 'avatar-2',
+    kind: 'human',
     connected: true,
   },
 ];
@@ -97,10 +99,43 @@ describe('room_waiting', () => {
             seatIndex: 0,
             nickname: 'Ana',
             avatarId: null,
+            kind: 'human',
             connected: true,
             hand: ['c1'],
           },
         ],
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe('assento (kind)', () => {
+  const botSeat = { ...seats[1], playerId: 'bot-1', kind: 'bot' };
+
+  it('aceita assento de bot', () => {
+    expect(
+      roomWaitingMessageSchema.safeParse({ ...roomWaiting, seats: [seats[0], botSeat] }).success,
+    ).toBe(true);
+  });
+
+  it('rejeita assento sem kind', () => {
+    const withoutKind = {
+      playerId: 'p1',
+      seatIndex: 0,
+      nickname: 'Ana',
+      avatarId: null,
+      connected: true,
+    };
+    expect(
+      roomWaitingMessageSchema.safeParse({ ...roomWaiting, seats: [withoutKind] }).success,
+    ).toBe(false);
+  });
+
+  it('rejeita kind fora do contrato', () => {
+    expect(
+      roomWaitingMessageSchema.safeParse({
+        ...roomWaiting,
+        seats: [{ ...seats[0], kind: 'spectator' }],
       }).success,
     ).toBe(false);
   });

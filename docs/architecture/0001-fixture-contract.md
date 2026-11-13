@@ -98,7 +98,7 @@ interface GameDefinition<S, A, P, V, R, E> {
 ```ts
 type ActionPayload = { type: "play_card"; cardId: CardId };
 
-type SeatInfo = { playerId: PlayerId; seatIndex: SeatIndex; nickname: Nickname; avatarId: AvatarId; connected: boolean }; // infra; lista ordenada por seatIndex
+type SeatInfo = { playerId: PlayerId; seatIndex: SeatIndex; nickname: Nickname; avatarId: AvatarId; kind: 'human' | 'bot'; connected: boolean }; // infra; lista ordenada por seatIndex; `kind` vem do ADR-002 (o fixture só tem humanos)
 
 type FixturePublicView = {
   gameId: "fixture";

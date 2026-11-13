@@ -474,6 +474,7 @@ export class FixtureRoom extends Room {
         seatIndex: session.seatIndex,
         nickname: session.nickname,
         avatarId: session.avatarId,
+        kind: 'human',
         connected: session.clientSessionId !== null,
       }));
   }

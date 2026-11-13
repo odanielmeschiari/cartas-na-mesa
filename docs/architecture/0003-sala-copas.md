@@ -65,7 +65,8 @@ público, do privado de cada humano e dos eventos.
   `version` e publica.
 - **`Rng` de produção:** um adaptador fino sobre `randomUint32` (`apps/server/src/rooms/random.ts`),
   isto é, CSPRNG direto, **sem seed de 32 bits**. Isso evita a pendência A3 para o Copas: a mão
-  oculta nunca depende de um PRNG de seed pequena.
+  oculta nunca depende de um PRNG de seed pequena. **Implementado** como `createCryptoRng` em
+  `apps/server/src/rooms/random.ts`.
 - **Teste:** a sala expõe uma costura `protected createRng(): Rng` que o teste sobrescreve com
   `createSeededRng`; só ela muda, como em `createMatchSeed` (doc 0002 §4).
 - Na distribuição inicial, a sala também usa `createRng()`; a partida não guarda seed.
@@ -85,7 +86,7 @@ público, do privado de cada humano e dos eventos.
 | # | Passo | Agente | Pronto quando |
 | --- | --- | --- | --- |
 | 1 | Aprovar ADR-002 e as decisões da seção 8 | usuário | Decisões registradas |
-| 2 | Contrato: união (`z.union`) por jogo e `SeatInfo.kind` em `packages/protocol` | `implementer` + `tester` | Testes de contrato do fixture e do Copas passam |
+| 2 | Contrato: união (`z.union`) por jogo e `SeatInfo.kind` em `packages/protocol` (**`SeatInfo.kind` feito**; falta a união, que alarga os tipos usados pelo cliente web do spike) | `implementer` + `tester` | Testes de contrato do fixture e do Copas passam |
 | 3 | Generalizar `FixtureRoom` em sala por adaptador, sem mudar comportamento | `implementer` + `tester` | S1–S4 e regressões do fixture iguais |
 | 4 | `HeartsRoom`: mesa de 4, início, ação humana e `createRng` | `implementer` + `tester` | Partida só com humanos, com S3 por payload bruto |
 | 5 | Bots nos assentos vagos e agendamento da jogada | `implementer` + `tester` | Partida completa com 1 humano e 3 bots |

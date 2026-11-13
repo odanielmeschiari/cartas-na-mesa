@@ -8,6 +8,8 @@
 // A seed da partida NÃO vive aqui: ela é responsabilidade da sala (§4 de
 // docs/architecture/0002-spike-mecanismo-tempo-real.md).
 
+import type { Rng } from '@cartas-na-mesa/core';
+
 /**
  * Fonte de bytes aleatórios, injetável para tornar os testes determinísticos.
  *
@@ -103,6 +105,16 @@ export function randomUint32(source: RandomSource = cryptoRandomBytes): number {
     throw new Error('A fonte de aleatoriedade devolveu bytes insuficientes para formar um uint32.');
   }
   return b0 * 0x1000000 + b1 * 0x10000 + b2 * 0x100 + b3;
+}
+
+/**
+ * `Rng` do domínio sobre o CSPRNG, para jogos que sorteiam durante a partida (ex.: a mão
+ * seguinte do Copas, doc 0003 §5). Cada chamada consome 4 bytes novos da fonte: não há seed
+ * nem estado, então o baralho nunca depende de um PRNG de 32 bits (pendência A3). A fonte só
+ * é injetada por teste.
+ */
+export function createCryptoRng(source: RandomSource = cryptoRandomBytes): Rng {
+  return { nextUint32: () => randomUint32(source) };
 }
 
 /** Sorteia o índice do próximo caractere do alfabeto, descartando bytes fora da janela. */

@@ -23,6 +23,7 @@ function seat(overrides: Partial<SeatInfo> = {}): SeatInfo {
     seatIndex: 0,
     nickname: 'Ana',
     avatarId: null,
+    kind: 'human',
     connected: true,
     ...overrides,
   };
