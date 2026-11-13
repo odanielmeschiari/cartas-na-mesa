@@ -9,7 +9,7 @@ Plataforma web de jogos de cartas para jogar rapidamente, sem cadastro: sozinho 
 - Salas por código e salas públicas, com identidade anônima e efêmera.
 - Partidas contra bots e tutoriais guiados.
 - Personalização local de avatar, mesa e aparência das cartas.
-- Jogos planejados: Poker, Truco, Canastra e Paciência.
+- Jogos planejados: Poker, Truco, Canastra, Copas e Paciência.
 - Acessibilidade e responsividade como critérios de pronto.
 - Sem contas, dados pessoais, compras ou dinheiro real; fichas e pontos são fictícios.
 

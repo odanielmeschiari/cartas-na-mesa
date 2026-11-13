@@ -249,6 +249,7 @@ Mecânicas distintas, compartilhando a mesma infraestrutura de mesa, assentos, t
 
 - **Poker** — apostas, rodadas de aposta, informação oculta, showdown. Apenas fichas fictícias.
 - **Truco** — times, valor de mão, pedidos de truco, pontuação até a vitória.
+- **Copas (Hearts)** — 4 jogadores, passe de cartas, vazas, evitar copas e a dama de espadas, "virar a lua". Variante tradicional; regras em `docs/rules/copas.md`.
 - **Canastra** — jogos/melds, sequências e trincas, compra do lixo, pontuação.
 - **Paciência (Solitaire)** — um jogador, colunas de tabuleiro, células livres e pilhas de fundação.
 - **Extensível** — o catálogo cresce; cada jogo é um módulo com regras próprias.
@@ -355,6 +356,7 @@ Registrar a origem/licença de cada asset. Não usar material de terceiros sem p
 - Poker: qual variante (Texas Hold'em?) e profundidade de apostas no MVP.
 - Truco: variante (Paulista, Mineiro, Gaúcho) e número de jogadores por mesa.
 - Canastra: variante e regras de pontuação.
+- Copas: confirmar os padrões adotados em `docs/rules/copas.md` (seção "Decisões a confirmar").
 - Paciência: Klondike apenas ou múltiplas variações.
 - Chat de sala, emotes e moderação de salas públicas.
 - Persistência: salas só em memória ou histórico de partidas.

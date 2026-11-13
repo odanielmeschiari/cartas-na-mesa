@@ -253,6 +253,25 @@ a validar informação oculta e turnos em grupo.
 **Agente:** `architect` + `implementer` + `tester` · **Depende:** variante definida pelo usuário
 **Pronto quando:** partida completa contra bots e entre dois humanos.
 
+### 15a. Copas (variante tradicional)
+
+**Resumo:** Copas para 4 jogadores, com bots ocupando assentos vagos e online por código de sala.
+Regras em `docs/rules/copas.md`; regras puras (cartas, jogadas legais, vazas, pontuação, fim de
+partida) já em `packages/core/src/hearts.ts`, com testes. Falta, **cada um como passo atômico**:
+
+1. Confirmar com o usuário as "Decisões a confirmar" de `docs/rules/copas.md`.
+2. Motor `GameDefinition` do Copas: fase de passe (seleção oculta até os 4 confirmarem), fase de jogo,
+   fim de mão e de partida, sobre `hearts.ts`.
+3. Contratos em `packages/protocol` (ações `pass_cards`/`play_card`, visões pública e privada).
+4. Bot fácil (heurística) usando só a visão do próprio assento.
+5. Sala no servidor: mesa fixa de 4 assentos, bots nos vagos, ação automática por tempo limite.
+6. Mesa e interação no web (mobile-first) e, depois, tutorial.
+
+**Agente:** `architect` (passos 2–3) + `implementer` + `tester` · **Depende:** item 6 (gate do spike)
+e decisão do usuário
+**Pronto quando:** partida completa contra 3 bots e online entre humanos, sem vazar mãos nem as
+cartas do passe.
+
 ### 16. Canastra
 
 **Resumo:** melds, sequências/trincas, compra do lixo, pontuação e variante definida.
