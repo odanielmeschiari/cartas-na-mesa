@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 
+import klondikeSoloBanner from './assets/games/klondike-solo.jpg';
 import { playSound, preloadSounds } from './ui/sounds';
 import PatienceTable from './components/PatienceTable';
 import { ErrorBanner } from './components/ErrorBanner';
@@ -85,15 +86,18 @@ export function App() {
           <p className="text-sm text-emerald-100">
             Jogue cartas com um amigo em uma sala privada, ou treine uma Paciência.
           </p>
-          <div>
-            <button
-              className="cnm-btn cnm-btn-gold mt-2"
-              onClick={() => setMode('solo')}
-              type="button"
-            >
-              Jogar Paciência (solo)
-            </button>
-          </div>
+          <ul aria-label="Jogos" className="cnm-game-grid mt-2">
+            <li>
+              <button
+                aria-label="Jogar Paciência (solo)"
+                className="cnm-game-card"
+                onClick={() => setMode('solo')}
+                type="button"
+              >
+                <img alt="" height={512} src={klondikeSoloBanner} width={512} />
+              </button>
+            </li>
+          </ul>
         </header>
 
         <ErrorBanner

@@ -16,6 +16,7 @@ import undoIcon from '../assets/icons/undo.svg';
 import soundOffIcon from '../assets/icons/volume-mute.svg';
 import soundOnIcon from '../assets/icons/volume.svg';
 import { canAutoFinish, planAutoFinish } from '../ui/auto-finish';
+import { formatElapsed } from '../ui/format-time';
 import { findCompleteRuns, type CompleteRun } from '../ui/sequences';
 import { isMuted, playSound, preloadSounds, setMuted } from '../ui/sounds';
 import { findAutoMove, type AutoMoveSource } from '../ui/auto-move';
@@ -295,6 +296,8 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
   const [dealt, setDealt] = useState(0);
   const [muted, setMutedState] = useState(isMuted);
   const [round, setRound] = useState(0);
+  const [elapsed, setElapsed] = useState(0);
+  const elapsedRef = useRef(0);
   const [hint, setHint] = useState<Hint | null>(null);
   const [hintsUsed, setHintsUsed] = useState(0);
   const [undosUsed, setUndosUsed] = useState(0);
@@ -394,6 +397,18 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
     };
   }, [round]);
 
+  // Tempo jogado: conta desde o fim da distribuição até a vitória.
+  const finished = state.status === 'finished';
+  useEffect(() => {
+    if (phase !== 'playing' || finished) return;
+    const startedAt = Date.now() - elapsedRef.current * 1000;
+    const interval = window.setInterval(() => {
+      elapsedRef.current = Math.floor((Date.now() - startedAt) / 1000);
+      setElapsed(elapsedRef.current);
+    }, 1000);
+    return () => window.clearInterval(interval);
+  }, [phase, finished]);
+
   const run = useCallback(
     (payload: PatienceActionPayload): boolean => {
       const result = patienceGame.applyAction(state, { playerId: PLAYER_ID, payload });
@@ -487,6 +502,8 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
   const restart = () => {
     setState(newGame());
     setRound((r) => r + 1);
+    elapsedRef.current = 0;
+    setElapsed(0);
     setHistory([]);
     setSelection(null);
     setMessage(null);
@@ -599,15 +616,10 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
   return (
     <section aria-label="Mesa de Paciência" className="cnm-felt cnm-fullscreen">
       <div className="flex flex-wrap items-center justify-between gap-2 pb-3">
-        <div className="flex items-center gap-3">
-          <IconButton icon={backIcon} label="Voltar" onClick={onExit} />
-          <p className="text-sm font-semibold text-emerald-50" role="status">
-            Movimentos: {state.moves} · Fundações: {inFoundations}/52
-          </p>
-        </div>
+        <IconButton icon={backIcon} label="Voltar" onClick={onExit} />
         <div className="flex flex-wrap items-center gap-2">
           {canAct && canAutoFinish(state) ? (
-            <button className="cnm-btn cnm-btn-gold" onClick={finishGame} type="button">
+            <button className="cnm-btn cnm-btn-bar cnm-btn-gold" onClick={finishGame} type="button">
               Finalizar o jogo
             </button>
           ) : null}
@@ -633,183 +645,199 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
             label={`Desfazer (restam ${undosLeft} de ${MAX_UNDOS})`}
             onClick={undo}
           />
-          <button className="cnm-btn" onClick={restart} type="button">
+          <button className="cnm-btn cnm-btn-bar" onClick={restart} type="button">
             Nova partida
           </button>
         </div>
       </div>
 
-      <div className="cnm-board-wrap">
-        <div
-          className={`cnm-board ${phase === 'playing' && !finishing ? '' : 'cnm-busy'}`}
-          style={{ ['--rows' as string]: rows }}
-        >
-          {phase === 'shuffling' ? (
-            <div aria-hidden="true" className="cnm-shuffle">
-              {Array.from({ length: 10 }, (_, i) => (
-                <span
-                  className="cnm-card cnm-card-back cnm-shuffle-card"
-                  key={i}
-                  style={{
-                    ['--i' as string]: i,
-                    ['--side' as string]: i % 2 === 0 ? -1 : 1,
-                    backgroundImage: `url("${cardBackUrl() ?? ''}")`,
-                  }}
-                />
-              ))}
-            </div>
-          ) : null}
-          {phase === 'moving' ? (
-            <span
-              aria-hidden="true"
-              className="cnm-card cnm-card-back cnm-shuffle-fly"
-              style={{ backgroundImage: `url("${cardBackUrl() ?? ''}")` }}
-            />
-          ) : null}
-          <div className="cnm-row">
-            <button
-              aria-label={
-                state.stock.length > 0
-                  ? `Virar carta do monte (${state.stock.length} restantes)`
-                  : 'Reciclar o descarte no monte'
-              }
-              className={`cnm-slot ${hint?.source?.kind === 'stock' ? 'cnm-hint' : ''}`}
-              onClick={() => run({ type: 'flip_stock' })}
-              type="button"
-            >
-              {phase === 'shuffling' || phase === 'moving' ? null : state.stock.length > 0 ? (
-                <StockPile count={state.stock.length} />
-              ) : (
-                <span className="cnm-slot-hint">↻</span>
-              )}
-            </button>
-
-            <button
-              aria-label={
-                wasteTop === undefined ? 'Descarte vazio' : `Descarte: ${cardName(wasteTop)}`
-              }
-              className={`cnm-slot cnm-draggable ${drag?.source.kind === 'waste' ? 'cnm-hidden' : ''} ${hint?.source?.kind === 'waste' ? 'cnm-hint' : ''}`}
-              disabled={wasteTop === undefined}
-              onClick={() =>
-                !suppressClick.current &&
-                setSelection(selection?.kind === 'waste' ? null : { kind: 'waste' })
-              }
-              onPointerDown={(e) =>
-                wasteTop !== undefined && beginPointer(e, { kind: 'waste' }, [wasteTop])
-              }
-              onDoubleClick={() => autoMove({ kind: 'waste' })}
-              type="button"
-            >
-              {wasteTop === undefined ? null : (
-                <CardFace card={wasteTop} selected={selection?.kind === 'waste'} />
-              )}
-            </button>
-
-            <span className="cnm-spacer" />
-
-            {PATIENCE_SUITS.map((suit, i) => {
-              const pile = state.foundations[i] ?? [];
-              const top = pile[pile.length - 1];
-              return (
-                <button
-                  aria-label={`Fundação de ${suit}: ${pile.length} carta(s)`}
-                  className={`cnm-slot cnm-draggable ${drag?.source.kind === 'foundation' && drag.source.suit === suit ? 'cnm-hidden' : ''} ${hint?.target?.kind === 'foundation' && hint.target.suit === suit ? 'cnm-hint-target' : ''}`}
-                  data-drop="found"
-                  key={suit}
-                  onClick={() => onFoundationClick(suit)}
-                  onPointerDown={(e) =>
-                    top !== undefined && beginPointer(e, { kind: 'foundation', suit }, [top])
-                  }
-                  type="button"
-                >
-                  {top === undefined ? (
-                    <span className="cnm-slot-hint">{SUIT_SYMBOL[suit]}</span>
-                  ) : (
-                    <CardFace
-                      card={top}
-                      className="cnm-found-pop"
-                      key={top.id}
-                      selected={selection?.kind === 'foundation' && selection.suit === suit}
-                    />
-                  )}
-                </button>
-              );
-            })}
+      <div className="cnm-play">
+        <dl aria-label="Estatísticas da partida" className="cnm-stats">
+          <div>
+            <dt>Movimentos</dt>
+            <dd>{state.moves}</dd>
           </div>
+          <div>
+            <dt>Fundações</dt>
+            <dd>{inFoundations}/52</dd>
+          </div>
+          <div>
+            <dt>Tempo</dt>
+            <dd>{formatElapsed(elapsed)}</dd>
+          </div>
+        </dl>
+        <div className="cnm-board-wrap">
+          <div
+            className={`cnm-board ${phase === 'playing' && !finishing ? '' : 'cnm-busy'}`}
+            style={{ ['--rows' as string]: rows }}
+          >
+            {phase === 'shuffling' ? (
+              <div aria-hidden="true" className="cnm-shuffle">
+                {Array.from({ length: 10 }, (_, i) => (
+                  <span
+                    className="cnm-card cnm-card-back cnm-shuffle-card"
+                    key={i}
+                    style={{
+                      ['--i' as string]: i,
+                      ['--side' as string]: i % 2 === 0 ? -1 : 1,
+                      backgroundImage: `url("${cardBackUrl() ?? ''}")`,
+                    }}
+                  />
+                ))}
+              </div>
+            ) : null}
+            {phase === 'moving' ? (
+              <span
+                aria-hidden="true"
+                className="cnm-card cnm-card-back cnm-shuffle-fly"
+                style={{ backgroundImage: `url("${cardBackUrl() ?? ''}")` }}
+              />
+            ) : null}
+            <div className="cnm-row">
+              <button
+                aria-label={
+                  state.stock.length > 0
+                    ? `Virar carta do monte (${state.stock.length} restantes)`
+                    : 'Reciclar o descarte no monte'
+                }
+                className={`cnm-slot ${hint?.source?.kind === 'stock' ? 'cnm-hint' : ''}`}
+                onClick={() => run({ type: 'flip_stock' })}
+                type="button"
+              >
+                {phase === 'shuffling' || phase === 'moving' ? null : state.stock.length > 0 ? (
+                  <StockPile count={state.stock.length} />
+                ) : (
+                  <span className="cnm-slot-hint">↻</span>
+                )}
+              </button>
 
-          <div className="cnm-row cnm-columns">
-            {state.tableau.map((column, colIdx) => {
-              const down = state.faceDown[colIdx] ?? 0;
-              return (
-                <div
-                  className={`cnm-column ${hint?.target?.kind === 'column' && hint.target.column === colIdx ? 'cnm-hint-target' : ''} ${celebrating?.column === colIdx ? 'cnm-column-celebrate' : ''}`}
-                  data-drop={`col-${colIdx}`}
-                  key={colIdx}
-                  onClick={() => column.length === 0 && onTableauClick(colIdx, null)}
-                  style={{ height: `calc(var(--cw) * ${columnHeight(column.length, down)})` }}
-                >
-                  {column.length === 0 ? <span className="cnm-slot-hint">K</span> : null}
-                  {column.map((card, idx) => {
-                    const order = DEAL_ORDER.get(`${colIdx}-${idx}`) ?? -1;
-                    if (phase !== 'playing' && order >= dealt) return null;
-                    const isDown = idx < down;
-                    const offset = Math.min(idx, down) * 0.14 + Math.max(idx - down, 0) * 0.32;
-                    const isSelected =
-                      selection?.kind === 'tableau' &&
-                      selection.column === colIdx &&
-                      column.findIndex((c) => c.id === selection.cardId) <= idx;
-                    return (
-                      <button
-                        aria-label={isDown ? 'Carta virada para baixo' : cardName(card)}
-                        className={`cnm-stacked cnm-draggable ${phase === 'dealing' ? 'cnm-dealt' : ''} ${
-                          celebrating?.column === colIdx && idx >= celebrating.start
-                            ? 'cnm-seq-celebrate'
-                            : ''
-                        } ${
-                          hint?.source?.kind === 'tableau' &&
-                          hint.source.column === colIdx &&
-                          idx >= hint.source.index
-                            ? 'cnm-hint'
-                            : ''
-                        } ${
-                          drag?.source.kind === 'tableau' &&
-                          drag.source.column === colIdx &&
-                          idx >= drag.source.index
-                            ? 'cnm-hidden'
-                            : ''
-                        }`}
-                        disabled={isDown}
-                        key={card.id}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onTableauClick(colIdx, card);
-                        }}
-                        onPointerDown={(e) =>
-                          !isDown &&
-                          beginPointer(
-                            e,
-                            { kind: 'tableau', column: colIdx, index: idx },
-                            column.slice(idx),
-                          )
-                        }
-                        onDoubleClick={() =>
-                          autoMove({ kind: 'tableau', column: colIdx, cardId: card.id })
-                        }
-                        style={{
-                          top: `calc(var(--cw) * ${offset})`,
-                          ['--col' as string]: colIdx,
-                          ['--off' as string]: offset,
-                          ['--k' as string]: celebrating === null ? 0 : idx - celebrating.start,
-                        }}
-                        type="button"
-                      >
-                        {isDown ? <CardBack /> : <CardFace card={card} selected={isSelected} />}
-                      </button>
-                    );
-                  })}
-                </div>
-              );
-            })}
+              <button
+                aria-label={
+                  wasteTop === undefined ? 'Descarte vazio' : `Descarte: ${cardName(wasteTop)}`
+                }
+                className={`cnm-slot cnm-draggable ${drag?.source.kind === 'waste' ? 'cnm-hidden' : ''} ${hint?.source?.kind === 'waste' ? 'cnm-hint' : ''}`}
+                disabled={wasteTop === undefined}
+                onClick={() =>
+                  !suppressClick.current &&
+                  setSelection(selection?.kind === 'waste' ? null : { kind: 'waste' })
+                }
+                onPointerDown={(e) =>
+                  wasteTop !== undefined && beginPointer(e, { kind: 'waste' }, [wasteTop])
+                }
+                onDoubleClick={() => autoMove({ kind: 'waste' })}
+                type="button"
+              >
+                {wasteTop === undefined ? null : (
+                  <CardFace card={wasteTop} selected={selection?.kind === 'waste'} />
+                )}
+              </button>
+
+              <span className="cnm-spacer" />
+
+              {PATIENCE_SUITS.map((suit, i) => {
+                const pile = state.foundations[i] ?? [];
+                const top = pile[pile.length - 1];
+                return (
+                  <button
+                    aria-label={`Fundação de ${suit}: ${pile.length} carta(s)`}
+                    className={`cnm-slot cnm-draggable ${drag?.source.kind === 'foundation' && drag.source.suit === suit ? 'cnm-hidden' : ''} ${hint?.target?.kind === 'foundation' && hint.target.suit === suit ? 'cnm-hint-target' : ''}`}
+                    data-drop="found"
+                    key={suit}
+                    onClick={() => onFoundationClick(suit)}
+                    onPointerDown={(e) =>
+                      top !== undefined && beginPointer(e, { kind: 'foundation', suit }, [top])
+                    }
+                    type="button"
+                  >
+                    {top === undefined ? (
+                      <span className="cnm-slot-hint">{SUIT_SYMBOL[suit]}</span>
+                    ) : (
+                      <CardFace
+                        card={top}
+                        className="cnm-found-pop"
+                        key={top.id}
+                        selected={selection?.kind === 'foundation' && selection.suit === suit}
+                      />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="cnm-row cnm-columns">
+              {state.tableau.map((column, colIdx) => {
+                const down = state.faceDown[colIdx] ?? 0;
+                return (
+                  <div
+                    className={`cnm-column ${hint?.target?.kind === 'column' && hint.target.column === colIdx ? 'cnm-hint-target' : ''} ${celebrating?.column === colIdx ? 'cnm-column-celebrate' : ''}`}
+                    data-drop={`col-${colIdx}`}
+                    key={colIdx}
+                    onClick={() => column.length === 0 && onTableauClick(colIdx, null)}
+                    style={{ height: `calc(var(--cw) * ${columnHeight(column.length, down)})` }}
+                  >
+                    {column.length === 0 ? <span className="cnm-slot-hint">K</span> : null}
+                    {column.map((card, idx) => {
+                      const order = DEAL_ORDER.get(`${colIdx}-${idx}`) ?? -1;
+                      if (phase !== 'playing' && order >= dealt) return null;
+                      const isDown = idx < down;
+                      const offset = Math.min(idx, down) * 0.14 + Math.max(idx - down, 0) * 0.32;
+                      const isSelected =
+                        selection?.kind === 'tableau' &&
+                        selection.column === colIdx &&
+                        column.findIndex((c) => c.id === selection.cardId) <= idx;
+                      return (
+                        <button
+                          aria-label={isDown ? 'Carta virada para baixo' : cardName(card)}
+                          className={`cnm-stacked cnm-draggable ${phase === 'dealing' ? 'cnm-dealt' : ''} ${
+                            celebrating?.column === colIdx && idx >= celebrating.start
+                              ? 'cnm-seq-celebrate'
+                              : ''
+                          } ${
+                            hint?.source?.kind === 'tableau' &&
+                            hint.source.column === colIdx &&
+                            idx >= hint.source.index
+                              ? 'cnm-hint'
+                              : ''
+                          } ${
+                            drag?.source.kind === 'tableau' &&
+                            drag.source.column === colIdx &&
+                            idx >= drag.source.index
+                              ? 'cnm-hidden'
+                              : ''
+                          }`}
+                          disabled={isDown}
+                          key={card.id}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onTableauClick(colIdx, card);
+                          }}
+                          onPointerDown={(e) =>
+                            !isDown &&
+                            beginPointer(
+                              e,
+                              { kind: 'tableau', column: colIdx, index: idx },
+                              column.slice(idx),
+                            )
+                          }
+                          onDoubleClick={() =>
+                            autoMove({ kind: 'tableau', column: colIdx, cardId: card.id })
+                          }
+                          style={{
+                            top: `calc(var(--cw) * ${offset})`,
+                            ['--col' as string]: colIdx,
+                            ['--off' as string]: offset,
+                            ['--k' as string]: celebrating === null ? 0 : idx - celebrating.start,
+                          }}
+                          type="button"
+                        >
+                          {isDown ? <CardBack /> : <CardFace card={card} selected={isSelected} />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
       </div>
