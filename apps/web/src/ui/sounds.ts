@@ -119,10 +119,10 @@ export function preloadSounds(): void {
 
 /**
  * Toca um efeito. Cada chamada cria uma fonte nova, então vários sons podem
- * se sobrepor (distribuição rápida). Falhas são silenciosas: som nunca
- * quebra o jogo.
+ * se sobrepor (distribuição rápida). `volumeScale` (0–1) abaixa o volume só
+ * desta chamada. Falhas são silenciosas: som nunca quebra o jogo.
  */
-export function playSound(name: SoundName): void {
+export function playSound(name: SoundName, volumeScale = 1): void {
   if (muted) return;
   if (name === 'shuffle') {
     // Evita som duplicado quando o React remonta o componente em desenvolvimento.
@@ -139,7 +139,7 @@ export function playSound(name: SoundName): void {
     const source = ctx.createBufferSource();
     const gain = ctx.createGain();
     source.buffer = sound.buffer;
-    gain.gain.value = VOLUME[name];
+    gain.gain.value = VOLUME[name] * volumeScale;
     source.connect(gain).connect(ctx.destination);
     source.start(0, sound.offset);
     return;
@@ -149,6 +149,6 @@ export function playSound(name: SoundName): void {
   const template = fallbacks.get(name);
   if (template === undefined) return;
   const audio = template.cloneNode(true) as HTMLAudioElement;
-  audio.volume = VOLUME[name];
+  audio.volume = Math.min(1, VOLUME[name] * volumeScale);
   audio.play()?.catch(() => undefined);
 }

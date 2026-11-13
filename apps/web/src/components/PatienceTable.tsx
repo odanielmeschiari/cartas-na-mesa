@@ -10,6 +10,13 @@ import {
   type PatienceSuit,
 } from '@cartas-na-mesa/core';
 
+import backIcon from '../assets/icons/left.svg';
+import hintIcon from '../assets/icons/lightbulb-on.svg';
+import undoIcon from '../assets/icons/undo.svg';
+import soundOffIcon from '../assets/icons/volume-mute.svg';
+import soundOnIcon from '../assets/icons/volume.svg';
+import { canAutoFinish, planAutoFinish } from '../ui/auto-finish';
+import { findCompleteRuns, type CompleteRun } from '../ui/sequences';
 import { isMuted, playSound, preloadSounds, setMuted } from '../ui/sounds';
 import { findAutoMove, type AutoMoveSource } from '../ui/auto-move';
 import { cardBackUrl, cardFaceUrl, cardName, SUIT_SYMBOL } from '../ui/card-assets';
@@ -48,8 +55,9 @@ type Hint = {
   readonly text: string;
 };
 
-/** Sem nenhuma jogada por este tempo, a mesa mostra uma dica. */
-const HINT_DELAY_MS = 3000;
+/** Quantas vezes, por partida, o jogador pode pedir uma dica e desfazer uma jogada. */
+const MAX_HINTS = 3;
+const MAX_UNDOS = 3;
 
 /** Ordem real de distribuição do Klondike: fileira por fileira, da esquerda para a direita. */
 const DEAL_ORDER: ReadonlyMap<string, number> = (() => {
@@ -62,7 +70,15 @@ const DEAL_ORDER: ReadonlyMap<string, number> = (() => {
 const DEAL_TOTAL = DEAL_ORDER.size;
 const SHUFFLE_MS = 1050;
 const MOVE_MS = 380;
-const DEAL_INTERVAL_MS = 70;
+const DEAL_INTERVAL_MS = 95;
+/** A distribuição toca o som de mover carta mais baixo que uma jogada normal. */
+const DEAL_SOUND_VOLUME = 0.55;
+/** Intervalo entre as cartas que sobem sozinhas na animação de "Finalizar o jogo". */
+const FINISH_STEP_MS = 75;
+/** Duração (com folga) da animação de sequência K→A completa. */
+const CELEBRATE_MS = 1700;
+/** O monte começa com 52 − 28 = 24 cartas: uma camada visual por carta. */
+const STOCK_MAX = 24;
 /** Janela em que um duplo clique ignora uma jogada recém-feita por clique simples. */
 const DOUBLE_CLICK_GUARD_MS = 500;
 
@@ -168,12 +184,20 @@ function columnHeight(total: number, down: number): number {
   );
 }
 
-function CardFace({ card, selected }: { card: PatienceCard; selected?: boolean }) {
+function CardFace({
+  card,
+  selected,
+  className = '',
+}: {
+  card: PatienceCard;
+  selected?: boolean;
+  className?: string;
+}) {
   const url = cardFaceUrl(card);
   return (
     <span
       aria-hidden="true"
-      className={`cnm-card ${selected ? 'cnm-card-selected' : ''}`}
+      className={`cnm-card ${selected ? 'cnm-card-selected' : ''} ${className}`}
       style={url === undefined ? undefined : { backgroundImage: `url("${url}")` }}
     >
       {url === undefined ? `${card.value}${SUIT_SYMBOL[card.suit]}` : null}
@@ -189,6 +213,67 @@ function CardBack() {
       className="cnm-card cnm-card-back"
       style={url === undefined ? undefined : { backgroundImage: `url("${url}")` }}
     />
+  );
+}
+
+/** Monte de compra: uma camada por carta, cada uma com um desvio mínimo de ângulo e posição. */
+function StockPile({ count }: { count: number }) {
+  const url = cardBackUrl();
+  return (
+    <span aria-hidden="true" className="cnm-stock-stack">
+      {Array.from({ length: Math.min(count, STOCK_MAX) }, (_, j) => {
+        // j = 0 é a carta de baixo; o desvio depende só de j, então comprar não move as demais.
+        const angle = (((j * 37) % 11) - 5) * 0.3;
+        const depth = (STOCK_MAX - 1 - j) * 0.25;
+        const wobble = (((j * 53) % 7) - 3) * 0.2;
+        return (
+          <span
+            className="cnm-card cnm-card-back cnm-stock-layer"
+            key={j}
+            style={{
+              transform: `translate(${depth + wobble}px, ${depth}px) rotate(${angle}deg)`,
+              ...(url === undefined ? {} : { backgroundImage: `url("${url}")` }),
+            }}
+          />
+        );
+      })}
+    </span>
+  );
+}
+
+function IconButton({
+  icon,
+  label,
+  badge,
+  disabled,
+  onClick,
+}: {
+  icon: string;
+  label: string;
+  badge?: number;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      aria-label={label}
+      className="cnm-btn cnm-btn-icon"
+      disabled={disabled}
+      onClick={onClick}
+      title={label}
+      type="button"
+    >
+      <span
+        aria-hidden="true"
+        className="cnm-icon"
+        style={{ ['--icon' as string]: `url("${icon}")` }}
+      />
+      {badge === undefined ? null : (
+        <span aria-hidden="true" className="cnm-btn-badge">
+          {badge}
+        </span>
+      )}
+    </button>
   );
 }
 
@@ -211,6 +296,12 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
   const [muted, setMutedState] = useState(isMuted);
   const [round, setRound] = useState(0);
   const [hint, setHint] = useState<Hint | null>(null);
+  const [hintsUsed, setHintsUsed] = useState(0);
+  const [undosUsed, setUndosUsed] = useState(0);
+  // Estados que levam à vitória na animação de "Finalizar o jogo"; `null` fora dela.
+  const [finishSteps, setFinishSteps] = useState<readonly PatienceState[] | null>(null);
+  const [celebrating, setCelebrating] = useState<CompleteRun | null>(null);
+  const celebratedRef = useRef<ReadonlySet<string>>(new Set());
   const suppressClick = useRef(false);
   // Instante da última jogada feita por clique simples (ver `autoMove`).
   const clickMovedAt = useRef(0);
@@ -230,13 +321,44 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
     };
   }, []);
 
-  // Dica: depois de HINT_DELAY_MS sem jogar, destaca uma jogada útil.
+  // A dica só aparece quando pedida e vale para o estado atual: qualquer jogada a apaga.
   useEffect(() => {
     setHint(null);
-    if (phase !== 'playing' || drag !== null || state.status === 'finished') return;
-    const timer = window.setTimeout(() => setHint(findHint(state)), HINT_DELAY_MS);
+  }, [state]);
+
+  // Sequência K→A completa: celebra uma vez por sequência (desfazer e refazer celebra de novo).
+  useEffect(() => {
+    const runs = findCompleteRuns(state);
+    const fresh = runs.find((r) => !celebratedRef.current.has(r.key));
+    celebratedRef.current = new Set(runs.map((r) => r.key));
+    if (fresh === undefined || phase !== 'playing') return;
+    setCelebrating(fresh);
+    setMessage('Sequência completa, do K ao A! ✨');
+  }, [state, phase]);
+
+  useEffect(() => {
+    if (celebrating === null) return;
+    const timer = window.setTimeout(() => setCelebrating(null), CELEBRATE_MS);
     return () => window.clearTimeout(timer);
-  }, [state, phase, drag, selection]);
+  }, [celebrating]);
+
+  // "Finalizar o jogo": sobe uma carta por vez para a fundação, sem som.
+  useEffect(() => {
+    if (finishSteps === null) return;
+    let next = 0;
+    const interval = window.setInterval(() => {
+      const step = finishSteps[next];
+      next += 1;
+      if (step === undefined) {
+        window.clearInterval(interval);
+        setFinishSteps(null);
+        return;
+      }
+      setState(step);
+      setSelection(null);
+    }, FINISH_STEP_MS);
+    return () => window.clearInterval(interval);
+  }, [finishSteps]);
 
   // Início da partida: embaralha (1s) e depois distribui uma carta por vez.
   useEffect(() => {
@@ -256,7 +378,7 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
         interval = window.setInterval(() => {
           count += 1;
           setDealt(count);
-          playSound('move');
+          playSound('move', DEAL_SOUND_VOLUME);
           if (count >= DEAL_TOTAL) {
             window.clearInterval(interval);
             setPhase('playing');
@@ -368,14 +490,35 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
     setHistory([]);
     setSelection(null);
     setMessage(null);
+    setHintsUsed(0);
+    setUndosUsed(0);
+    setFinishSteps(null);
+    setCelebrating(null);
   };
 
   const undo = () => {
     const previous = history[history.length - 1];
-    if (previous === undefined) return;
+    if (previous === undefined || undosUsed >= MAX_UNDOS) return;
+    setUndosUsed((n) => n + 1);
     setState(previous);
     setHistory(history.slice(0, -1));
     setSelection(null);
+  };
+
+  const showHint = () => {
+    if (hint !== null || hintsUsed >= MAX_HINTS) return;
+    setHint(findHint(state));
+    setHintsUsed((n) => n + 1);
+  };
+
+  const finishGame = () => {
+    const plan = planAutoFinish(state);
+    if (!plan.completed) {
+      setMessage('Não foi possível finalizar o jogo automaticamente.');
+      return;
+    }
+    setSelection(null);
+    setFinishSteps(plan.steps);
   };
 
   const sendSelectionToFoundation = (sel: Selection): boolean =>
@@ -442,6 +585,10 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
   const wasteTop = state.waste[state.waste.length - 1];
   const inFoundations = state.foundations.reduce((sum, pile) => sum + pile.length, 0);
   const won = state.status === 'finished';
+  const finishing = finishSteps !== null;
+  const canAct = phase === 'playing' && !finishing && !won;
+  const hintsLeft = MAX_HINTS - hintsUsed;
+  const undosLeft = MAX_UNDOS - undosUsed;
   // Altura necessária (em larguras de carta): a carta encolhe só o bastante para tudo caber sem rolagem.
   const rows = Math.max(
     6,
@@ -453,28 +600,39 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
     <section aria-label="Mesa de Paciência" className="cnm-felt cnm-fullscreen">
       <div className="flex flex-wrap items-center justify-between gap-2 pb-3">
         <div className="flex items-center gap-3">
-          <button className="cnm-btn" onClick={onExit} type="button">
-            ← Voltar
-          </button>
+          <IconButton icon={backIcon} label="Voltar" onClick={onExit} />
           <p className="text-sm font-semibold text-emerald-50" role="status">
             Movimentos: {state.moves} · Fundações: {inFoundations}/52
           </p>
         </div>
-        <div className="flex gap-2">
-          <button
-            aria-pressed={muted}
-            className="cnm-btn"
+        <div className="flex flex-wrap items-center gap-2">
+          {canAct && canAutoFinish(state) ? (
+            <button className="cnm-btn cnm-btn-gold" onClick={finishGame} type="button">
+              Finalizar o jogo
+            </button>
+          ) : null}
+          <IconButton
+            icon={muted ? soundOffIcon : soundOnIcon}
+            label={muted ? 'Ligar o som' : 'Desligar o som'}
             onClick={() => {
               setMuted(!muted);
               setMutedState(!muted);
             }}
-            type="button"
-          >
-            {muted ? '🔇 Som desligado' : '🔊 Som'}
-          </button>
-          <button className="cnm-btn" disabled={history.length === 0} onClick={undo} type="button">
-            Desfazer
-          </button>
+          />
+          <IconButton
+            badge={hintsLeft}
+            disabled={!canAct || hintsLeft <= 0}
+            icon={hintIcon}
+            label={`Ver dica (restam ${hintsLeft} de ${MAX_HINTS})`}
+            onClick={showHint}
+          />
+          <IconButton
+            badge={undosLeft}
+            disabled={!canAct || history.length === 0 || undosLeft <= 0}
+            icon={undoIcon}
+            label={`Desfazer (restam ${undosLeft} de ${MAX_UNDOS})`}
+            onClick={undo}
+          />
           <button className="cnm-btn" onClick={restart} type="button">
             Nova partida
           </button>
@@ -483,7 +641,7 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
 
       <div className="cnm-board-wrap">
         <div
-          className={`cnm-board ${phase === 'playing' ? '' : 'cnm-busy'}`}
+          className={`cnm-board ${phase === 'playing' && !finishing ? '' : 'cnm-busy'}`}
           style={{ ['--rows' as string]: rows }}
         >
           {phase === 'shuffling' ? (
@@ -520,7 +678,7 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
               type="button"
             >
               {phase === 'shuffling' || phase === 'moving' ? null : state.stock.length > 0 ? (
-                <CardBack />
+                <StockPile count={state.stock.length} />
               ) : (
                 <span className="cnm-slot-hint">↻</span>
               )}
@@ -569,6 +727,8 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
                   ) : (
                     <CardFace
                       card={top}
+                      className="cnm-found-pop"
+                      key={top.id}
                       selected={selection?.kind === 'foundation' && selection.suit === suit}
                     />
                   )}
@@ -582,7 +742,7 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
               const down = state.faceDown[colIdx] ?? 0;
               return (
                 <div
-                  className={`cnm-column ${hint?.target?.kind === 'column' && hint.target.column === colIdx ? 'cnm-hint-target' : ''}`}
+                  className={`cnm-column ${hint?.target?.kind === 'column' && hint.target.column === colIdx ? 'cnm-hint-target' : ''} ${celebrating?.column === colIdx ? 'cnm-column-celebrate' : ''}`}
                   data-drop={`col-${colIdx}`}
                   key={colIdx}
                   onClick={() => column.length === 0 && onTableauClick(colIdx, null)}
@@ -602,6 +762,10 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
                       <button
                         aria-label={isDown ? 'Carta virada para baixo' : cardName(card)}
                         className={`cnm-stacked cnm-draggable ${phase === 'dealing' ? 'cnm-dealt' : ''} ${
+                          celebrating?.column === colIdx && idx >= celebrating.start
+                            ? 'cnm-seq-celebrate'
+                            : ''
+                        } ${
                           hint?.source?.kind === 'tableau' &&
                           hint.source.column === colIdx &&
                           idx >= hint.source.index
@@ -635,6 +799,7 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
                           top: `calc(var(--cw) * ${offset})`,
                           ['--col' as string]: colIdx,
                           ['--off' as string]: offset,
+                          ['--k' as string]: celebrating === null ? 0 : idx - celebrating.start,
                         }}
                         type="button"
                       >

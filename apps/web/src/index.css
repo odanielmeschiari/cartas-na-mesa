@@ -181,7 +181,8 @@
 }
 
 .cnm-slot:has(> .cnm-card),
-.cnm-slot:has(> .cnm-card):disabled {
+.cnm-slot:has(> .cnm-card):disabled,
+.cnm-slot:has(> .cnm-stock-stack) {
   border-style: solid;
   border-color: transparent;
   background: none;
@@ -204,6 +205,45 @@
 
 .cnm-btn-gold {
   background: #facc15;
+}
+
+/* Botões só com ícone: o ícone herda a cor do botão (máscara) e o alvo tátil tem 44px. */
+.cnm-btn-icon {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  padding: 0;
+}
+
+.cnm-icon {
+  display: block;
+  width: 1.4rem;
+  height: 1.4rem;
+  background-color: currentColor;
+  mask: var(--icon) center / contain no-repeat;
+  -webkit-mask: var(--icon) center / contain no-repeat;
+}
+
+/* Quantas dicas/desfazer ainda restam: número, não só cor. */
+.cnm-btn-badge {
+  position: absolute;
+  top: -0.3rem;
+  right: -0.3rem;
+  display: grid;
+  place-items: center;
+  min-width: 1.25rem;
+  height: 1.25rem;
+  padding: 0 0.25rem;
+  border-radius: 999px;
+  background: #14532d;
+  color: #f0fdf4;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1;
+  box-shadow: 0 0 0 2px #fefce8;
 }
 
 .cnm-win {
@@ -381,7 +421,7 @@
 
 /* A carta sai do monte (canto superior esquerdo) e voa até a sua coluna. */
 .cnm-dealt {
-  animation: cnm-deal 280ms cubic-bezier(0.2, 0.7, 0.3, 1) backwards;
+  animation: cnm-deal 340ms cubic-bezier(0.2, 0.7, 0.3, 1) backwards;
 }
 
 @keyframes cnm-deal {
@@ -440,5 +480,70 @@
   }
   50% {
     box-shadow: 0 0 18px 6px rgb(250 204 21 / 0.95);
+  }
+}
+
+/* Monte de compra: uma camada por carta restante, cada uma com um desvio mínimo de ângulo. */
+.cnm-stock-stack {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 800 / 1080;
+}
+
+.cnm-stock-layer {
+  position: absolute;
+  inset: 0;
+  box-shadow:
+    0 0 0 0.5px rgb(0 0 0 / 0.4),
+    0 1px 1px rgb(0 0 0 / 0.3);
+}
+
+/* Carta que acaba de subir para a fundação. */
+.cnm-found-pop {
+  animation: cnm-pop 260ms cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
+}
+
+@keyframes cnm-pop {
+  from {
+    transform: scale(1.18);
+    filter: brightness(1.25);
+  }
+  to {
+    transform: none;
+    filter: none;
+  }
+}
+
+/* Sequência K→A completa: as cartas da coluna "pulam" em onda, com brilho dourado. */
+.cnm-seq-celebrate {
+  animation: cnm-seq-wave 700ms ease-in-out both;
+  animation-delay: calc(var(--k) * 55ms);
+}
+
+@keyframes cnm-seq-wave {
+  0%,
+  100% {
+    transform: none;
+    filter: none;
+  }
+  40% {
+    transform: translateY(calc(var(--cw) * -0.28)) scale(1.07);
+    filter: drop-shadow(0 0 10px rgb(250 204 21 / 0.95)) brightness(1.15);
+  }
+}
+
+.cnm-column-celebrate {
+  animation: cnm-seq-ring 1.4s ease-out both;
+}
+
+@keyframes cnm-seq-ring {
+  0% {
+    box-shadow: 0 0 0 0 rgb(250 204 21 / 0.9);
+  }
+  60% {
+    box-shadow: 0 0 22px 8px rgb(250 204 21 / 0.55);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgb(250 204 21 / 0);
   }
 }
