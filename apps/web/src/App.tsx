@@ -82,11 +82,8 @@ export function App() {
     <main className="cnm-page min-h-screen px-4 py-6">
       <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
         <header className="flex flex-col gap-1">
-          <h1 className="cnm-title">♠ Cartas na Mesa ♥</h1>
-          <p className="text-sm text-emerald-100">
-            Jogue cartas com um amigo em uma sala privada, ou treine uma Paciência.
-          </p>
-          <ul aria-label="Jogos" className="cnm-game-grid mt-2">
+          <h1 className="cnm-title text-center">♠ Cartas na Mesa ♥</h1>
+          <ul aria-label="Jogos" className="cnm-game-grid mt-8">
             <li>
               <button
                 aria-label="Jogar Paciência (solo)"

@@ -615,7 +615,7 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
 
   return (
     <section aria-label="Mesa de Paciência" className="cnm-felt cnm-fullscreen">
-      <div className="flex flex-wrap items-center justify-between gap-2 pb-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 px-3 pt-3 pb-3 sm:px-6 sm:pt-4">
         <IconButton icon={backIcon} label="Voltar" onClick={onExit} />
         <div className="flex flex-wrap items-center gap-2">
           {canAct && canAutoFinish(state) ? (
