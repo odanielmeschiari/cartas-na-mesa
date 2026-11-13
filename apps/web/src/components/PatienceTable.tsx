@@ -11,6 +11,7 @@ import {
 } from '@cartas-na-mesa/core';
 
 import { isMuted, playSound, preloadSounds, setMuted } from '../ui/sounds';
+import { findAutoMove, type AutoMoveSource } from '../ui/auto-move';
 import { cardBackUrl, cardFaceUrl, cardName, SUIT_SYMBOL } from '../ui/card-assets';
 
 const PLAYER_ID = 'player-1';
@@ -62,6 +63,8 @@ const DEAL_TOTAL = DEAL_ORDER.size;
 const SHUFFLE_MS = 1050;
 const MOVE_MS = 380;
 const DEAL_INTERVAL_MS = 70;
+/** Janela em que um duplo clique ignora uma jogada recém-feita por clique simples. */
+const DOUBLE_CLICK_GUARD_MS = 500;
 
 /**
  * Escolhe uma jogada útil, nesta ordem: a que vira uma carta escondida, a que
@@ -194,7 +197,8 @@ function CardBack() {
  *
  * Toda regra vive em `patienceGame` (núcleo determinístico); aqui só se
  * escolhe a origem e o destino. Toque/clique em uma carta para selecioná-la e
- * depois no destino; duplo clique envia a carta direto para a fundação.
+ * depois no destino; duplo clique envia a carta direto para a posição certa
+ * (fundação ou coluna), quando existir.
  */
 export default function PatienceTable({ onExit }: { readonly onExit: () => void }) {
   const [state, setState] = useState<PatienceState>(() => newGame());
@@ -208,6 +212,8 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
   const [round, setRound] = useState(0);
   const [hint, setHint] = useState<Hint | null>(null);
   const suppressClick = useRef(false);
+  // Instante da última jogada feita por clique simples (ver `autoMove`).
+  const clickMovedAt = useRef(0);
 
   useEffect(() => {
     if (message === null) return;
@@ -250,7 +256,7 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
         interval = window.setInterval(() => {
           count += 1;
           setDealt(count);
-          playSound('draw');
+          playSound('move');
           if (count >= DEAL_TOTAL) {
             window.clearInterval(interval);
             setPhase('playing');
@@ -273,7 +279,7 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
         setMessage(result.error.message);
         return false;
       }
-      playSound(payload.type === 'flip_stock' ? 'draw' : 'move');
+      playSound('move');
       setHistory((h) => [...h, state]);
       setState(result.state);
       setSelection(null);
@@ -379,6 +385,20 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
         ? run({ type: 'tableau_to_foundation', fromColumn: sel.column })
         : false;
 
+  /** Duplo clique: leva a carta para a fundação ou, se não der, para uma coluna válida. */
+  const autoMove = (source: AutoMoveSource) => {
+    if (phase !== 'playing') return;
+    // Se um dos cliques do duplo clique já completou uma jogada (carta selecionada
+    // + clique no destino), o duplo clique não deve movê-la uma segunda vez.
+    if (Date.now() - clickMovedAt.current < DOUBLE_CLICK_GUARD_MS) return;
+    const payload = findAutoMove(state, source);
+    if (payload === null) {
+      setMessage('Essa carta não tem para onde ir.');
+      return;
+    }
+    run(payload);
+  };
+
   const onTableauClick = (column: number, card: PatienceCard | null) => {
     if (suppressClick.current) return;
     if (selection === null) {
@@ -404,7 +424,8 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
               cardId: selection.cardId,
             })
           : run({ type: 'foundation_to_tableau', suit: selection.suit, toColumn: column });
-    if (!moved && card !== null) setSelection({ kind: 'tableau', column, cardId: card.id });
+    if (moved) clickMovedAt.current = Date.now();
+    else if (card !== null) setSelection({ kind: 'tableau', column, cardId: card.id });
   };
 
   const onFoundationClick = (suit: PatienceSuit) => {
@@ -414,8 +435,8 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
       if (pile.length > 0) setSelection({ kind: 'foundation', suit });
       return;
     }
-    if (!sendSelectionToFoundation(selection) && selection.kind === 'foundation')
-      setSelection(null);
+    if (sendSelectionToFoundation(selection)) clickMovedAt.current = Date.now();
+    else if (selection.kind === 'foundation') setSelection(null);
   };
 
   const wasteTop = state.waste[state.waste.length - 1];
@@ -518,7 +539,7 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
               onPointerDown={(e) =>
                 wasteTop !== undefined && beginPointer(e, { kind: 'waste' }, [wasteTop])
               }
-              onDoubleClick={() => sendSelectionToFoundation({ kind: 'waste' })}
+              onDoubleClick={() => autoMove({ kind: 'waste' })}
               type="button"
             >
               {wasteTop === undefined ? null : (
@@ -559,7 +580,6 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
           <div className="cnm-row cnm-columns">
             {state.tableau.map((column, colIdx) => {
               const down = state.faceDown[colIdx] ?? 0;
-              const top = column[column.length - 1] ?? null;
               return (
                 <div
                   className={`cnm-column ${hint?.target?.kind === 'column' && hint.target.column === colIdx ? 'cnm-hint-target' : ''}`}
@@ -609,12 +629,7 @@ export default function PatienceTable({ onExit }: { readonly onExit: () => void 
                           )
                         }
                         onDoubleClick={() =>
-                          card === top &&
-                          sendSelectionToFoundation({
-                            kind: 'tableau',
-                            column: colIdx,
-                            cardId: card.id,
-                          })
+                          autoMove({ kind: 'tableau', column: colIdx, cardId: card.id })
                         }
                         style={{
                           top: `calc(var(--cw) * ${offset})`,

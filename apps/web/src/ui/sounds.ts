@@ -1,4 +1,3 @@
-import drawUrl from '../assets/sounds/comprar-carta.mp3';
 import moveUrl from '../assets/sounds/mover-carta.mp3';
 import shuffleUrl from '../assets/sounds/shuffle.mp3';
 
@@ -6,17 +5,16 @@ import shuffleUrl from '../assets/sounds/shuffle.mp3';
  * Efeitos sonoros do jogo.
  *
  * - `shuffle`: embaralhamento (o arquivo já tem 1 segundo).
- * - `draw`: uma carta distribuída ou comprada do monte.
- * - `move`: uma carta trocada de lugar ou baixada na mesa.
+ * - `move`: uma carta distribuída, comprada do monte, trocada de lugar ou baixada na mesa.
  *
  * Os sons são decodificados uma vez (Web Audio) e tocados na hora, sem o
  * atraso do `<audio>`. Os arquivos têm ~0,1 s de silêncio no começo; esse
  * trecho é medido na decodificação e pulado, para o som sair junto com o gesto.
  */
-export type SoundName = 'shuffle' | 'draw' | 'move';
+export type SoundName = 'shuffle' | 'move';
 
-const URLS: Record<SoundName, string> = { shuffle: shuffleUrl, draw: drawUrl, move: moveUrl };
-const VOLUME: Record<SoundName, number> = { shuffle: 0.7, draw: 0.8, move: 0.8 };
+const URLS: Record<SoundName, string> = { shuffle: shuffleUrl, move: moveUrl };
+const VOLUME: Record<SoundName, number> = { shuffle: 0.7, move: 0.8 };
 const MUTE_KEY = 'cnm:muted';
 const SILENCE_THRESHOLD = 0.01;
 const SAFETY_MARGIN_S = 0.002;
