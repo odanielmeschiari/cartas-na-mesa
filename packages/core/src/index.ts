@@ -68,3 +68,14 @@ export {
   type PlayContext,
   type TrickPlay,
 } from './hearts';
+export {
+  heartsGame,
+  startNextHand,
+  type HeartsActionPayload,
+  type HeartsEvent,
+  type HeartsPhase,
+  type HeartsPrivateView,
+  type HeartsPublicView,
+  type HeartsResult,
+  type HeartsState,
+} from './hearts-game';
